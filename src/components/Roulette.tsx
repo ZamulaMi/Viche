@@ -1,20 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  LANGS,
-  shortId,
-  simulateMatch,
-  TAGS,
-  type Filters,
-  type Peer,
-} from "../lib/sim";
-import { loopbackConnect, makeCanvasStream, type CanvasCtl, type LocalMedia } from "../lib/rtc";
+import { LANGS, TAGS, shortId, type Filters, type Peer } from "../lib/sim";
+import type { LocalMedia } from "../lib/rtc";
+import { FALLBACK_WAIT_MS, MatchClient, type MatchResult, type NetMode } from "../lib/net";
 import { useI18n, type DictKey } from "../i18n";
 import { useScramble } from "../lib/hooks";
 import CaptchaModal, { captchaToken } from "./Captcha";
 import VideoChat from "./VideoChat";
 import { IconBolt, IconCheck, IconFlag, IconShuffle, LogoMark } from "./icons";
 
-type Phase = "idle" | "captcha" | "searching" | "connecting" | "live";
+type Phase = "idle" | "captcha" | "searching" | "live";
 
 type Props = {
   localMedia: LocalMedia | null;
@@ -33,104 +27,193 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
   const [advanced, setAdvanced] = useState(false);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const [mode, setMode] = useState<NetMode>("connecting");
+  const [queued, setQueued] = useState(false);
+  const [demoNote, setDemoNote] = useState(false);
+  const [chat, setChat] = useState<MatchResult["chat"] | null>(null);
 
-  const rtcClose = useRef<(() => void) | null>(null);
-  const ctlRef = useRef<CanvasCtl | null>(null);
+  const clientRef = useRef<MatchClient | null>(null);
+  const closeRef = useRef<(() => void) | null>(null);
+  const speakRef = useRef<((b: boolean) => void) | null>(null);
+  const lmRef = useRef(localMedia);
+  const hasSearched = useRef(false);
   const runRef = useRef(0);
   const liveRef = useRef(true);
+  const waitTimer = useRef(0);
+  const filtersRef = useRef(filters);
+  const tRef = useRef(t);
+  const toastRef = useRef(onToast);
 
-  /* Реальний ідентифікатор сесії цього клієнта */
+  useEffect(() => {
+    filtersRef.current = filters;
+  }, [filters]);
+  useEffect(() => {
+    lmRef.current = localMedia;
+  }, [localMedia]);
+  useEffect(() => {
+    tRef.current = t;
+    toastRef.current = onToast;
+  }, [t, onToast]);
+
   const sessionId = useMemo(() => "SES-" + shortId(4), []);
+
+  const clearWait = () => {
+    window.clearTimeout(waitTimer.current);
+    waitTimer.current = 0;
+  };
+
+  const closeRemote = useCallback(() => {
+    closeRef.current?.();
+    closeRef.current = null;
+    setRemoteStream(null);
+  }, []);
 
   useEffect(() => {
     liveRef.current = true;
     return () => {
       liveRef.current = false;
       runRef.current++;
-      rtcClose.current?.();
-      ctlRef.current?.close();
+      clearWait();
+      closeRef.current?.();
+      clientRef.current?.dispose();
+      clientRef.current = null;
     };
   }, []);
 
-  const cleanupRemote = useCallback(() => {
-    rtcClose.current?.();
-    rtcClose.current = null;
-    ctlRef.current?.close();
-    ctlRef.current = null;
-    setRemoteStream(null);
-  }, []);
-
-  const busy = phase === "searching" || phase === "connecting";
-
-  /* Реальний таймер пошуку: йде лише поки триває пошук/з'єднання */
+  /* реальний таймер: йде лише поки триває пошук */
+  const busy = phase === "searching";
   useEffect(() => {
     if (!busy) return;
     const id = window.setInterval(() => setElapsed((v) => v + 1), 1000);
     return () => window.clearInterval(id);
   }, [busy]);
 
-  const beginSearch = useCallback(
-    async (f: Filters) => {
-      cleanupRemote();
-      const run = ++runRef.current;
-      setPeer(null);
-      setElapsed(0);
-      setPhase("searching");
-      const p = await simulateMatch(f);
-      if (runRef.current !== run || !liveRef.current) return;
-      setPeer(p);
-      setPhase("connecting");
-      const ctl = makeCanvasStream(p.name.split("_")[1] ?? "GG", p.hue);
-      ctlRef.current = ctl;
-      try {
-        const lc = await loopbackConnect(ctl.stream);
-        if (runRef.current !== run || !liveRef.current) {
-          lc.close();
-          ctl.close();
-          return;
-        }
-        rtcClose.current = lc.close;
-        setRemoteStream(lc.stream);
-      } catch {
-        if (runRef.current !== run) return;
-        setRemoteStream(ctl.stream);
-      }
-      setPhase("live");
+  const openClient = useCallback(
+    (lm: LocalMedia) => {
+      if (clientRef.current) return clientRef.current;
+      const client = new MatchClient(lm.stream, {
+        onMode: (m) => {
+          setMode(m);
+          if (m === "demo" && hasSearched.current) {
+            toastRef.current(tRef.current("toast.demoFallback"), "warn");
+          }
+        },
+        onQueued: () => {
+          setQueued(true);
+          clearWait();
+          waitTimer.current = window.setTimeout(() => {
+            clientRef.current?.demoPairOnce();
+          }, FALLBACK_WAIT_MS);
+        },
+        onPair: (r) => {
+          if (!liveRef.current) {
+            r.close();
+            return;
+          }
+          clearWait();
+          setQueued(false);
+          setDemoNote(r.demo);
+          setPeer(r.peer);
+          setChat(r.chat ?? null);
+          speakRef.current = r.setSpeaking ?? null;
+          closeRef.current = r.close;
+          setRemoteStream(r.stream);
+          setPhase("live");
+        },
+        onPeerLeft: () => {
+          clearWait();
+          setQueued(false);
+          closeRemote();
+          setPeer(null);
+          setChat(null);
+          speakRef.current = null;
+          if (!liveRef.current) return;
+          toastRef.current(tRef.current("toast.peerLeft"), "warn");
+          // автоматично шукаємо наступного
+          window.setTimeout(() => {
+            if (liveRef.current) beginSearchRef.current(filtersRef.current);
+          }, 700);
+        },
+        onNotice: (key) => {
+          toastRef.current(tRef.current(key as DictKey), "warn");
+        },
+      });
+      clientRef.current = client;
+      return client;
     },
-    [cleanupRemote]
+    [closeRemote]
   );
 
+  const beginSearch = useCallback(
+    (f: Filters) => {
+      runRef.current++;
+      clearWait();
+      closeRemote();
+      setPeer(null);
+      setDemoNote(false);
+      setElapsed(0);
+      setQueued(false);
+      setPhase("searching");
+      hasSearched.current = true;
+      const lm = lmRef.current;
+      if (lm) openClient(lm).search(f);
+    },
+    [closeRemote, openClient]
+  );
+  const beginSearchRef = useRef(beginSearch);
+  useEffect(() => {
+    beginSearchRef.current = beginSearch;
+  }, [beginSearch]);
+
   const start = async () => {
-    await ensureLocal();
-    if (!captchaToken()) {
-      setPhase("captcha");
-      return;
+    try {
+      const lm = await ensureLocal();
+      lmRef.current = lm;
+      if (!captchaToken()) {
+        setPhase("captcha");
+        return;
+      }
+      beginSearch(filtersRef.current);
+    } catch {
+      onToast(t("toast.demoFallback"), "warn");
     }
-    beginSearch(filters);
   };
 
   const stop = () => {
     runRef.current++;
-    cleanupRemote();
+    clearWait();
+    clientRef.current?.stop();
+    closeRemote();
     setPeer(null);
+    setDemoNote(false);
+    setQueued(false);
     setElapsed(0);
     setPhase("idle");
   };
 
-  const next = () => beginSearch(filters);
+  const next = () => beginSearch(filtersRef.current);
 
-  const stateKey = phase === "searching" || phase === "connecting" || phase === "live" ? phase : "standby";
+  const stateKey = phase === "searching" || phase === "live" ? phase : "standby";
   const stateWord = useScramble(t(`state.${stateKey}`), 60);
   const titleWord = useScramble(t("idle.title"), 150);
 
-  const ledCls =
-    phase === "live" ? "led-mint" : phase === "idle" || phase === "captcha" ? "" : "led-amber";
+  const ledCls = phase === "live" ? "led-mint" : phase === "searching" ? "led-amber" : "";
 
   const mediaLabel = localMedia
     ? localMedia.hasCam
       ? t("stat.mediaCam")
       : t("stat.mediaAvatar")
     : t("stat.mediaPending");
+
+  const modeLabel =
+    mode === "online" ? t("stat.modeOnline") : mode === "demo" ? t("stat.modeDemo") : t("stat.modeConnecting");
+
+  const caption =
+    mode === "demo"
+      ? t("search.captionDemo")
+      : queued
+        ? t("search.queued")
+        : t("search.captionOnline");
 
   const genderLabel =
     filters.gender === "any" ? t("flt.any") : filters.gender === "m" ? t("flt.male") : t("flt.female");
@@ -145,7 +228,8 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
               <VideoChat
                 peer={peer}
                 remoteStream={remoteStream}
-                setRemoteSpeaking={(b) => ctlRef.current?.setSpeaking(b)}
+                setRemoteSpeaking={(b) => speakRef.current?.(b)}
+                chat={chat ?? undefined}
                 localMedia={localMedia}
                 onLeave={(k) => (k === "next" ? next() : stop())}
                 onReport={() => onToast(t("rep.sent"), "ok")}
@@ -153,7 +237,6 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
               />
             ) : (
               <div className="absolute inset-0 grid place-items-center scanlines">
-                {/* декоративні кільця */}
                 <div className="absolute w-[420px] h-[420px] rounded-full border border-[var(--c-line)] opacity-60" />
                 <div className="absolute w-[300px] h-[300px] rounded-full border border-[var(--c-line)] opacity-80" />
                 {phase === "searching" && (
@@ -177,21 +260,36 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
                       <h2 className="font-display font-900 text-2xl sm:text-4xl tracking-tight">{titleWord}</h2>
                       <p className="mt-3 text-sm sm:text-[15px] text-[var(--c-dim)] leading-relaxed">{t("idle.sub")}</p>
                       <div className="mt-5 flex flex-wrap justify-center gap-2">
-                        {([["idle.b1", <IconCheck key="a" className="w-3.5 h-3.5" />], ["idle.b2", <IconCheck key="b" className="w-3.5 h-3.5" />], ["idle.b3", <IconFlag key="c" className="w-3.5 h-3.5" />]] as const).map(([k, ic]) => (
-                          <span key={k} className="chip !cursor-default !text-[12px]">{ic}{t(k)}</span>
+                        {([[
+                          "idle.b1",
+                          <IconCheck key="a" className="w-3.5 h-3.5" />,
+                        ], [
+                          "idle.b2",
+                          <IconCheck key="b" className="w-3.5 h-3.5" />,
+                        ], [
+                          "idle.b3",
+                          <IconFlag key="c" className="w-3.5 h-3.5" />,
+                        ]] as const).map(([k, ic]) => (
+                          <span key={k} className="chip !cursor-default !text-[12px]">
+                            {ic}
+                            {t(k)}
+                          </span>
                         ))}
                       </div>
                       <p className="mt-6 font-mono text-[11px] text-[var(--c-faint)] caret">ready · dtls-srtp · p2p</p>
                     </>
                   ) : (
                     <>
-                      <h2 className={`font-display font-900 text-2xl sm:text-3xl ${phase === "connecting" ? "text-[var(--c-amber)]" : "text-[var(--c-mint)]"}`}>
-                        {phase === "searching" ? t("state.searching") : t("state.connecting")}
+                      <h2 className="font-display font-900 text-2xl sm:text-3xl text-[var(--c-mint)]">
+                        {t("state.searching")}
                       </h2>
-                      <p className="mt-3 font-mono text-[13px] text-[var(--c-dim)] caret">
+                      <p className="mt-2 font-mono text-[12px] text-[var(--c-dim)]">{caption}</p>
+                      <p className="mt-1 font-mono text-[13px] text-[var(--c-amber)] caret">
                         {t("stat.elapsed")} · {fmtElapsed(elapsed)}
                       </p>
-                      <button className="btn mt-6" onClick={stop}>{t("ctl.stop")}</button>
+                      <button className="btn mt-6" onClick={stop}>
+                        {t("ctl.stop")}
+                      </button>
                     </>
                   )}
                 </div>
@@ -217,7 +315,7 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
               <IconShuffle className="w-5 h-5" />
               {phase === "idle" || phase === "captcha" ? t("ctl.start") : t("ctl.resume")}
             </button>
-            {(phase !== "idle" && phase !== "captcha") && (
+            {phase !== "idle" && phase !== "captcha" && (
               <button className="btn btn-red" onClick={stop} disabled={busy}>
                 {t("ctl.stop")}
               </button>
@@ -304,7 +402,11 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
               <p className="font-700 text-[15px] truncate">{peer && phase === "live" ? peer.name : sessionId}</p>
               <p className="font-mono text-[11px] text-[var(--c-dim)]">
                 {peer && phase === "live"
-                  ? `${peer.langs.map((l) => l.toUpperCase()).join("/")} · ${peer.tags.map((x) => "#" + x).join(" ")}`
+                  ? demoNote
+                    ? t("stat.pairDemo")
+                    : peer.real
+                      ? `#${peer.id} · p2p`
+                      : `${peer.langs.map((l) => l.toUpperCase()).join("/")} · ${peer.tags.map((x) => "#" + x).join(" ")}`
                   : mediaLabel}
               </p>
             </div>
@@ -312,6 +414,7 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
 
           <div className="mt-4 space-y-px rounded-lg border border-[var(--c-line)] bg-[var(--c-bg2)] overflow-hidden">
             {([
+              [t("stat.mode"), modeLabel, mode === "online" ? "text-[var(--c-mint)]" : mode === "demo" ? "text-[var(--c-amber)]" : "text-[var(--c-faint)]"],
               [t("stat.elapsed"), busy || phase === "live" ? fmtElapsed(elapsed) : "—", busy ? "text-[var(--c-amber)]" : "text-[var(--c-mint)]"],
               [t("stat.session"), sessionId, "text-[var(--c-text)]"],
               [t("stat.media"), mediaLabel, "text-[var(--c-text)]"],
@@ -346,7 +449,7 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
       {phase === "captcha" && (
         <CaptchaModal
           onPass={() => {
-            beginSearch(filters);
+            beginSearch(filtersRef.current);
           }}
         />
       )}

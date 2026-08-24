@@ -23,6 +23,8 @@ type Props = {
   peer: Peer;
   remoteStream: MediaStream | null;
   setRemoteSpeaking: (b: boolean) => void;
+  /** реальний текстовий чат (лише для мережевої пари) */
+  chat?: { send: (text: string) => void; subscribe: (fn: (text: string) => void) => () => void };
   localMedia: LocalMedia | null;
   onLeave: (kind: "next" | "end") => void;
   onReport: () => void;
@@ -35,6 +37,7 @@ export default function VideoChat({
   peer,
   remoteStream,
   setRemoteSpeaking,
+  chat,
   localMedia,
   onLeave,
   onReport,
@@ -94,13 +97,66 @@ export default function VideoChat({
     };
   }, [peer.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* симуляція мовлення + репліки "співрозмовника" */
+  /* індикатор мовлення: реальний VAD за аудіо-треком, для демо — симуляція */
   useEffect(() => {
-    const iv = window.setInterval(() => {
-      const s = Math.random() > 0.42;
-      setSpeaking(s);
-      setRemoteSpeaking(s);
-    }, 2400);
+    let stopFn: (() => void) | null = null;
+    const hasAudio = !!remoteStream && remoteStream.getAudioTracks().length > 0;
+    if (hasAudio && remoteStream) {
+      let ctx: AudioContext | null = null;
+      let raf = 0;
+      let dead = false;
+      try {
+        ctx = new AudioContext();
+        const src = ctx.createMediaStreamSource(remoteStream);
+        const an = ctx.createAnalyser();
+        an.fftSize = 512;
+        src.connect(an);
+        const buf = new Uint8Array(an.fftSize);
+        let last = 0;
+        const tick = (ts: number) => {
+          if (dead) return;
+          raf = requestAnimationFrame(tick);
+          if (ts - last < 140) return;
+          last = ts;
+          an.getByteTimeDomainData(buf);
+          let sum = 0;
+          for (let i = 0; i < buf.length; i++) {
+            const d = (buf[i] - 128) / 128;
+            sum += d * d;
+          }
+          const s = Math.sqrt(sum / buf.length) > 0.04;
+          setSpeaking(s);
+          setRemoteSpeaking(s);
+        };
+        raf = requestAnimationFrame(tick);
+        stopFn = () => {
+          dead = true;
+          cancelAnimationFrame(raf);
+          ctx?.close().catch(() => {});
+        };
+      } catch {
+        stopFn = null;
+      }
+    }
+    if (!stopFn) {
+      // демо-співрозмовник: симульоване мовлення
+      const iv = window.setInterval(() => {
+        const s = Math.random() > 0.42;
+        setSpeaking(s);
+        setRemoteSpeaking(s);
+      }, 2400);
+      stopFn = () => window.clearInterval(iv);
+    }
+    return () => {
+      stopFn?.();
+      setSpeaking(false);
+      setRemoteSpeaking(false);
+    };
+  }, [remoteStream, peer.id, setRemoteSpeaking]);
+
+  /* репліки "співрозмовника" — лише для демо-пари */
+  useEffect(() => {
+    if (chat) return;
     const timers: number[] = [];
     const count = 2 + Math.floor(Math.random() * 2);
     for (let i = 0; i < count; i++) {
@@ -108,13 +164,18 @@ export default function VideoChat({
         window.setTimeout(() => push("peer", randomPhrase(peerLang)), 3600 + i * 6500 + Math.random() * 2000)
       );
     }
-    return () => {
-      window.clearInterval(iv);
-      timers.forEach(clearTimeout);
-      setSpeaking(false);
-      setRemoteSpeaking(false);
-    };
-  }, [peer.id, peerLang, push, setRemoteSpeaking]);
+    return () => timers.forEach(clearTimeout);
+  }, [peer.id, peerLang, push, chat]);
+
+  /* вхідні повідомлення з реального data-каналу */
+  useEffect(() => {
+    if (!chat) return;
+    return chat.subscribe((text) => {
+      const { text: clean, flagged } = filterProfanity(text);
+      push("peer", clean);
+      if (flagged) push("warn", t("chat.warn"));
+    });
+  }, [chat, push, t]);
 
   useEffect(() => {
     const el = listRef.current;
@@ -130,6 +191,11 @@ export default function VideoChat({
     if (flagged) {
       push("warn", t("chat.warn"));
       onToast(t("chat.warn"), "warn");
+    }
+    if (chat) {
+      // реальна доставка співрозмовнику через DataConnection
+      chat.send(text);
+      return;
     }
     if (Math.random() > 0.55) {
       window.setTimeout(() => push("peer", randomPhrase(peerLang)), 1600 + Math.random() * 1800);
@@ -181,7 +247,9 @@ export default function VideoChat({
           <div className="leading-tight">
             <p className="font-mono text-[10px] tracking-[0.18em] text-[var(--c-mint)]">{t("state.live")}</p>
             <p className="text-sm font-700 text-[var(--c-text)]">
-              {peer.name} <span className="font-mono text-[11px] text-[var(--c-dim)]">· {peer.ping} ms</span>
+              {peer.name}
+              {!peer.real && <span className="font-mono text-[11px] text-[var(--c-dim)]"> · {peer.ping} ms</span>}
+              {peer.real && <span className="font-mono text-[11px] text-[var(--c-mint)]"> · p2p</span>}
             </p>
           </div>
         </div>
@@ -196,11 +264,17 @@ export default function VideoChat({
             ))}
           </div>
           <div className="flex gap-1">
-            {peer.tags.slice(0, 3).map((tg) => (
-              <span key={tg} className="font-mono text-[10px] px-2 py-0.5 rounded-md bg-[color-mix(in_srgb,var(--c-bg)_72%,transparent)] backdrop-blur-md border border-[var(--c-line)] text-[var(--c-dim)]">
-                #{tg}
+            {peer.real ? (
+              <span className="font-mono text-[10px] px-2 py-0.5 rounded-md bg-[color-mix(in_srgb,var(--c-bg)_72%,transparent)] backdrop-blur-md border border-[var(--c-line)] text-[var(--c-mint)]">
+                #{peer.id} · webrtc
               </span>
-            ))}
+            ) : (
+              peer.tags.slice(0, 3).map((tg) => (
+                <span key={tg} className="font-mono text-[10px] px-2 py-0.5 rounded-md bg-[color-mix(in_srgb,var(--c-bg)_72%,transparent)] backdrop-blur-md border border-[var(--c-line)] text-[var(--c-dim)]">
+                  #{tg}
+                </span>
+              ))
+            )}
           </div>
         </div>
       </div>

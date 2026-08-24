@@ -21,6 +21,8 @@ export type Peer = {
   tags: string[];
   hue: number;
   ping: number;
+  /** true — реальний учасник (мережевий пошук), без вигаданих тегів/мов */
+  real?: boolean;
 };
 
 
