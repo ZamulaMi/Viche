@@ -40,6 +40,19 @@ npm run dev
 docker compose up -d --scale viche-server=4
 ```
 
+## Деплой фронту (Vercel)
+
+У корені є `vercel.json` (`framework: vite`, `outputDirectory: dist`, SPA-rewrites),
+тому попередження *"build output contains no functions or static directory"* не
+з'являється:
+
+```bash
+npm i -g vercel && vercel --prod
+```
+
+Для іншого хостингу (Netlify/Cloudflare Pages) вкажіть build `npm run build`
+та publish/output каталог `dist`.
+
 ## Структура
 
 ```
@@ -54,8 +67,9 @@ src/
   i18n.tsx       — словники UK/EN
   lib/rtc.ts     — getUserMedia, loopback RTCPeerConnection (демо)
   lib/sim.ts     — демо-матчер (у продакшн замінюється WS-клієнтом)
-  components/    — Roulette, VideoChat, Rooms, Captcha, Architecture
+  components/    — Roulette, VideoChat, Rooms, Captcha
 docker-compose.yml · deploy/{nginx.conf,schema.sql} · server/Dockerfile
+vercel.json      — деплой фронту на Vercel (framework vite, output dist)
 ```
 
 ## WS-протокол

@@ -1,16 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  estimateQueue,
   LANGS,
-  now,
   shortId,
   simulateMatch,
   TAGS,
   type Filters,
-  type LogLine,
-  type LogKind,
   type Peer,
-  type SimNet,
 } from "../lib/sim";
 import { loopbackConnect, makeCanvasStream, type CanvasCtl, type LocalMedia } from "../lib/rtc";
 import { useI18n, type DictKey } from "../i18n";
@@ -25,50 +20,37 @@ type Props = {
   localMedia: LocalMedia | null;
   ensureLocal: () => Promise<LocalMedia>;
   onToast: (msg: string, kind?: "ok" | "warn") => void;
-  net: SimNet;
 };
 
-const KEY_RE = /^[a-z]+\.[a-zA-Z]+$/;
+const fmtElapsed = (s: number) =>
+  `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 
-export default function Roulette({ localMedia, ensureLocal, onToast, net }: Props) {
+export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
   const { t, lang } = useI18n();
   const [phase, setPhase] = useState<Phase>("idle");
   const [filters, setFilters] = useState<Filters>({ gender: "any", lang, tags: [] });
-  const [logs, setLogs] = useState<LogLine[]>([]);
   const [peer, setPeer] = useState<Peer | null>(null);
   const [advanced, setAdvanced] = useState(false);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const [, forceTick] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
 
   const rtcClose = useRef<(() => void) | null>(null);
   const ctlRef = useRef<CanvasCtl | null>(null);
   const runRef = useRef(0);
   const liveRef = useRef(true);
 
-  const trLine = useCallback(
-    (s: string) =>
-      s
-        .split(" ")
-        .map((w) => (KEY_RE.test(w) ? t(w as DictKey) : w))
-        .join(" "),
-    [t]
-  );
-  const addLog = useCallback((msg: string, kind: LogKind = "sys") => {
-    setLogs((l) => [...l.slice(-70), { t: now(), msg, kind }]);
-  }, []);
+  /* Реальний ідентифікатор сесії цього клієнта */
+  const sessionId = useMemo(() => "SES-" + shortId(4), []);
 
   useEffect(() => {
     liveRef.current = true;
-    addLog(`tls 1.3 · ws://signal.viche.app · anon_${shortId(4)}`, "ok");
     return () => {
       liveRef.current = false;
       runRef.current++;
       rtcClose.current?.();
       ctlRef.current?.close();
     };
-  }, [addLog]);
-
-  useEffect(() => net.subscribe(() => forceTick((v) => v + 1)), [net]);
+  }, []);
 
   const cleanupRemote = useCallback(() => {
     rtcClose.current?.();
@@ -78,20 +60,28 @@ export default function Roulette({ localMedia, ensureLocal, onToast, net }: Prop
     setRemoteStream(null);
   }, []);
 
+  const busy = phase === "searching" || phase === "connecting";
+
+  /* Реальний таймер пошуку: йде лише поки триває пошук/з'єднання */
+  useEffect(() => {
+    if (!busy) return;
+    const id = window.setInterval(() => setElapsed((v) => v + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [busy]);
+
   const beginSearch = useCallback(
     async (f: Filters) => {
       cleanupRemote();
       const run = ++runRef.current;
       setPeer(null);
+      setElapsed(0);
       setPhase("searching");
-      const p = await simulateMatch(f, (m, k = "sys") => addLog(trLine(m), k));
+      const p = await simulateMatch(f);
       if (runRef.current !== run || !liveRef.current) return;
       setPeer(p);
       setPhase("connecting");
-      addLog(`${t("rtc.peer")}: ${p.name}`, "peer");
       const ctl = makeCanvasStream(p.name.split("_")[1] ?? "GG", p.hue);
       ctlRef.current = ctl;
-      addLog(trLine("rtc.ice"));
       try {
         const lc = await loopbackConnect(ctl.stream);
         if (runRef.current !== run || !liveRef.current) {
@@ -101,15 +91,13 @@ export default function Roulette({ localMedia, ensureLocal, onToast, net }: Prop
         }
         rtcClose.current = lc.close;
         setRemoteStream(lc.stream);
-        addLog(trLine("rtc.dtls"), "ok");
-        addLog(trLine("rtc.media"), "ok");
       } catch {
         if (runRef.current !== run) return;
         setRemoteStream(ctl.stream);
       }
       setPhase("live");
     },
-    [addLog, cleanupRemote, t, trLine]
+    [cleanupRemote]
   );
 
   const start = async () => {
@@ -125,24 +113,27 @@ export default function Roulette({ localMedia, ensureLocal, onToast, net }: Prop
     runRef.current++;
     cleanupRemote();
     setPeer(null);
+    setElapsed(0);
     setPhase("idle");
-    addLog(trLine("ctl.stop"), "warn");
   };
 
-  const next = () => {
-    addLog(trLine("chat.sysNext"), "warn");
-    beginSearch(filters);
-  };
+  const next = () => beginSearch(filters);
 
-  const busy = phase === "searching" || phase === "connecting";
   const stateKey = phase === "searching" || phase === "connecting" || phase === "live" ? phase : "standby";
   const stateWord = useScramble(t(`state.${stateKey}`), 60);
   const titleWord = useScramble(t("idle.title"), 150);
-  const queue = estimateQueue(filters);
-  const snap = net.snapshot();
 
   const ledCls =
     phase === "live" ? "led-mint" : phase === "idle" || phase === "captcha" ? "" : "led-amber";
+
+  const mediaLabel = localMedia
+    ? localMedia.hasCam
+      ? t("stat.mediaCam")
+      : t("stat.mediaAvatar")
+    : t("stat.mediaPending");
+
+  const genderLabel =
+    filters.gender === "any" ? t("flt.any") : filters.gender === "m" ? t("flt.male") : t("flt.female");
 
   return (
     <div className="grid lg:grid-cols-[minmax(0,1fr)_330px] gap-4 items-start">
@@ -157,7 +148,7 @@ export default function Roulette({ localMedia, ensureLocal, onToast, net }: Prop
                 setRemoteSpeaking={(b) => ctlRef.current?.setSpeaking(b)}
                 localMedia={localMedia}
                 onLeave={(k) => (k === "next" ? next() : stop())}
-                onReport={() => addLog(`report.user → ${peer.name} · ZADD reports:{ip} (TTL 24h)`, "warn")}
+                onReport={() => onToast(t("rep.sent"), "ok")}
                 onToast={onToast}
               />
             ) : (
@@ -197,10 +188,8 @@ export default function Roulette({ localMedia, ensureLocal, onToast, net }: Prop
                       <h2 className={`font-display font-900 text-2xl sm:text-3xl ${phase === "connecting" ? "text-[var(--c-amber)]" : "text-[var(--c-mint)]"}`}>
                         {phase === "searching" ? t("state.searching") : t("state.connecting")}
                       </h2>
-                      <p className="mt-3 font-mono text-[12px] text-[var(--c-dim)] caret">
-                        {phase === "searching"
-                          ? `${snap.online.toLocaleString("uk-UA")} ${t("tick.online")} · ≈${queue} ${t("flt.queue")}`
-                          : "offer → answer → ice → dtls"}
+                      <p className="mt-3 font-mono text-[13px] text-[var(--c-dim)] caret">
+                        {t("stat.elapsed")} · {fmtElapsed(elapsed)}
                       </p>
                       <button className="btn mt-6" onClick={stop}>{t("ctl.stop")}</button>
                     </>
@@ -215,9 +204,9 @@ export default function Roulette({ localMedia, ensureLocal, onToast, net }: Prop
             <span className={`led ${ledCls}`} />
             <span className="font-display text-[13px] font-700 tracking-wide">{stateWord}</span>
             <span className="hidden sm:block font-mono text-[11px] text-[var(--c-faint)]">
-              {peer && phase === "live" ? `${peer.name} · ${peer.ping} ms · #${peer.id}` : `wss://signal.viche.app/ws · ${t("tick.node")} eu-1`}
+              {peer && phase === "live" ? `${peer.name} · #${peer.id}` : sessionId}
             </span>
-            <span className="ml-auto tick-id text-[11px]">{phase === "live" && peer ? `PAIR-${peer.id}` : "SES-" + shortId(4)}</span>
+            <span className="ml-auto tick-id text-[11px]">{phase === "live" && peer ? `PAIR-${peer.id}` : sessionId}</span>
           </div>
         </div>
 
@@ -291,15 +280,12 @@ export default function Roulette({ localMedia, ensureLocal, onToast, net }: Prop
                   </div>
                 </div>
               </div>
-              <p className="mt-4 font-mono text-[12px] text-[var(--c-mint)]">
-                ≈ {queue.toLocaleString("uk-UA")} {t("flt.queue")}
-              </p>
             </div>
           </div>
         </div>
       </div>
 
-      {/* ── Бічна колонка: статус + журнал ── */}
+      {/* ── Бічна колонка: лише реальні дані сесії ── */}
       <aside className="space-y-4 min-w-0">
         <div className="card p-4">
           <p className="panel-title mb-3">{t("nav.roulette")} · status</p>
@@ -315,51 +301,44 @@ export default function Roulette({ localMedia, ensureLocal, onToast, net }: Prop
               {peer && phase === "live" ? peer.name.split("_")[1]?.slice(0, 2) : "V"}
             </span>
             <div className="min-w-0">
-              <p className="font-700 text-[15px] truncate">{peer && phase === "live" ? peer.name : "—"}</p>
+              <p className="font-700 text-[15px] truncate">{peer && phase === "live" ? peer.name : sessionId}</p>
               <p className="font-mono text-[11px] text-[var(--c-dim)]">
                 {peer && phase === "live"
-                  ? `${peer.ping} ms · ${peer.langs.map((l) => l.toUpperCase()).join("/")} · ${peer.tags.map((x) => "#" + x).join(" ")}`
-                  : `${snap.online.toLocaleString("uk-UA")} ${t("tick.online")}`}
+                  ? `${peer.langs.map((l) => l.toUpperCase()).join("/")} · ${peer.tags.map((x) => "#" + x).join(" ")}`
+                  : mediaLabel}
               </p>
             </div>
           </div>
-          <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-            {[
-              [snap.online.toLocaleString("uk-UA"), t("tick.online")],
-              [snap.pairs24.toLocaleString("uk-UA"), t("tick.pairs")],
-              [snap.avgWait.toFixed(1) + "s", t("tick.wait")],
-            ].map(([v, l]) => (
-              <div key={l} className="rounded-lg border border-[var(--c-line)] bg-[var(--c-bg2)] py-2.5 px-1">
-                <p className="font-mono font-700 text-[15px] text-[var(--c-mint)]">{v}</p>
-                <p className="text-[10px] text-[var(--c-faint)] leading-tight mt-0.5">{l}</p>
+
+          <div className="mt-4 space-y-px rounded-lg border border-[var(--c-line)] bg-[var(--c-bg2)] overflow-hidden">
+            {([
+              [t("stat.elapsed"), busy || phase === "live" ? fmtElapsed(elapsed) : "—", busy ? "text-[var(--c-amber)]" : "text-[var(--c-mint)]"],
+              [t("stat.session"), sessionId, "text-[var(--c-text)]"],
+              [t("stat.media"), mediaLabel, "text-[var(--c-text)]"],
+              [t("stat.channel"), phase === "live" ? t("stat.channelLive") : t("stat.channelIdle"), phase === "live" ? "text-[var(--c-mint)]" : "text-[var(--c-faint)]"],
+            ] as const).map(([label, value, cls]) => (
+              <div key={label} className="flex items-center justify-between gap-3 px-3.5 py-2.5 odd:bg-[color-mix(in_srgb,var(--c-raise)_55%,transparent)]">
+                <span className="text-[11px] text-[var(--c-faint)]">{label}</span>
+                <span className={`font-mono text-[12px] ${cls}`}>{value}</span>
               </div>
             ))}
           </div>
         </div>
 
-        <div className="card overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--c-line)]">
-            <p className="panel-title">signaling log</p>
-            <span className="font-mono text-[10px] text-[var(--c-mint)]">ws · live</span>
-          </div>
-          <div className="h-[280px] lg:h-[372px] overflow-y-auto px-4 py-3 font-mono text-[11.5px] leading-[1.7]">
-            {logs.map((l, i) => (
-              <p
-                key={i}
-                className={`logline break-words ${
-                  l.kind === "ok"
-                    ? "text-[var(--c-mint)]"
-                    : l.kind === "warn"
-                    ? "text-[var(--c-amber)]"
-                    : l.kind === "peer"
-                    ? "text-[var(--c-cy)]"
-                    : "text-[var(--c-dim)]"
-                }`}
-              >
-                <span className="text-[var(--c-faint)]">[{l.t}]</span> {l.msg}
-              </p>
+        {/* Активні фільтри — реальні значення з пульта */}
+        <div className="card p-4">
+          <p className="panel-title mb-3">{t("stat.filters")}</p>
+          <div className="flex flex-wrap gap-1.5">
+            <span className="chip !cursor-default !text-[12px]">{genderLabel}</span>
+            <span className="chip !cursor-default !text-[12px] font-mono">{filters.lang.toUpperCase()}</span>
+            {filters.tags.length === 0 && (
+              <span className="chip !cursor-default !text-[12px] opacity-60">{t("stat.noTags")}</span>
+            )}
+            {filters.tags.map((tg) => (
+              <span key={tg} className="chip chip-on !cursor-default !text-[12px]">
+                #{t(`tag.${tg}` as DictKey)}
+              </span>
             ))}
-            {busy && <p className="text-[var(--c-mint)] caret" />}
           </div>
         </div>
       </aside>
@@ -367,7 +346,6 @@ export default function Roulette({ localMedia, ensureLocal, onToast, net }: Prop
       {phase === "captcha" && (
         <CaptchaModal
           onPass={() => {
-            addLog(trLine("cap.ok"), "ok");
             beginSearch(filters);
           }}
         />

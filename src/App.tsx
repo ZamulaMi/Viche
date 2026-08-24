@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { I18nProvider, useI18n, type Lang } from "./i18n";
-import { SimNet } from "./lib/sim";
+import { shortId } from "./lib/sim";
 import { getLocalStream, prefersReducedMotion, type LocalMedia } from "./lib/rtc";
 import { useScramble } from "./lib/hooks";
 import Roulette from "./components/Roulette";
 import Rooms from "./components/Rooms";
-import Architecture from "./components/Architecture";
 import {
-  IconBlueprint,
   IconMoon,
   IconRooms,
   IconShuffle,
@@ -15,7 +13,7 @@ import {
   LogoMark,
 } from "./components/icons";
 
-type View = "roulette" | "rooms" | "arch";
+type View = "roulette" | "rooms";
 type Toast = { id: number; msg: string; kind: "ok" | "warn" };
 
 let tid = 0;
@@ -87,14 +85,20 @@ function Shell() {
   const initialJoin = useMemo(() => new URLSearchParams(location.search).get("room"), []);
   const [view, setView] = useState<View>(initialJoin ? "rooms" : "roulette");
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [, setTick] = useState(0);
 
-  const net = useMemo(() => new SimNet(), []);
   const localPromise = useRef<Promise<LocalMedia> | null>(null);
   const [localMedia, setLocalMedia] = useState<LocalMedia | null>(null);
 
-  useEffect(() => net.start(), [net]);
-  useEffect(() => net.subscribe(() => setTick((v) => v + 1)), [net]);
+  /* Реальні дані клієнта: час, ідентифікатор сесії */
+  const sessionId = useMemo(() => "SES-" + shortId(4), []);
+  const [clock, setClock] = useState(() => new Date().toLocaleTimeString("uk-UA", { hour12: false }));
+  useEffect(() => {
+    const id = window.setInterval(
+      () => setClock(new Date().toLocaleTimeString("uk-UA", { hour12: false })),
+      1000
+    );
+    return () => window.clearInterval(id);
+  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -124,27 +128,30 @@ function Shell() {
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
       if (e.key === "1") setView("roulette");
       if (e.key === "2") setView("rooms");
-      if (e.key === "3") setView("arch");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const snap = net.snapshot();
   const brand = useScramble("VICHE", 120);
 
   const NAV: Array<{ v: View; k: string; icon: React.ReactNode; key: string }> = [
     { v: "roulette", k: "1", icon: <IconShuffle className="w-5 h-5" />, key: "nav.roulette" },
     { v: "rooms", k: "2", icon: <IconRooms className="w-5 h-5" />, key: "nav.rooms" },
-    { v: "arch", k: "3", icon: <IconBlueprint className="w-5 h-5" />, key: "nav.arch" },
   ];
 
+  const mediaWord = localMedia
+    ? localMedia.hasCam
+      ? t("stat.mediaCam")
+      : t("stat.mediaAvatar")
+    : t("stat.mediaPending");
+
+  /* Тільки реальні дані клієнта */
   const tickerItems = [
-    [`● ${snap.online.toLocaleString("uk-UA")}`, t("tick.online"), "mint"],
-    [snap.pairs24.toLocaleString("uk-UA"), t("tick.pairs"), "amber"],
-    [snap.avgWait.toFixed(1) + "s", t("tick.wait"), "mint"],
-    [t("tick.sig"), "", "dim"],
-    [t("tick.turn"), "", "dim"],
+    [clock, t("tick.time"), "mint"],
+    [sessionId, t("tick.sess"), "amber"],
+    [mediaWord, t("stat.media"), "mint"],
+    [lang.toUpperCase(), t("tick.lang"), "dim"],
   ] as const;
 
   return (
@@ -230,10 +237,10 @@ function Shell() {
             <div className="mt-auto pt-6">
               <div className="rounded-lg border border-[var(--c-line)] bg-[var(--c-panel)] px-3.5 py-3">
                 <p className="flex items-center gap-2 font-mono text-[10.5px] text-[var(--c-mint)]">
-                  <span className="led led-mint" /> ws connected
+                  <span className="led led-mint" /> {sessionId}
                 </p>
                 <p className="font-mono text-[10px] text-[var(--c-faint)] mt-1.5 leading-relaxed">
-                  wss://signal.viche.app<br />node eu-1 · rt {(18 + (snap.online % 23))} ms
+                  {mediaWord}<br />{clock} · {lang.toUpperCase()}
                 </p>
               </div>
             </div>
@@ -242,13 +249,10 @@ function Shell() {
           {/* ── Контент ── */}
           <main className="flex-1 min-w-0 py-6 pb-28 lg:pb-10">
             <div className={view === "roulette" ? "block" : "hidden"}>
-              <Roulette localMedia={localMedia} ensureLocal={ensureLocal} onToast={push} net={net} />
+              <Roulette localMedia={localMedia} ensureLocal={ensureLocal} onToast={push} />
             </div>
             <div className={view === "rooms" ? "block" : "hidden"}>
               <Rooms localMedia={localMedia} ensureLocal={ensureLocal} onToast={push} initialJoin={initialJoin} />
-            </div>
-            <div className={view === "arch" ? "block" : "hidden"}>
-              <Architecture onToast={push} />
             </div>
           </main>
         </div>
@@ -264,7 +268,7 @@ function Shell() {
         </footer>
 
         {/* ── Мобільна навігація ── */}
-        <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 grid grid-cols-3 border-t border-[var(--c-line)] bg-[color-mix(in_srgb,var(--c-bg)_90%,transparent)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
+        <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 grid grid-cols-2 border-t border-[var(--c-line)] bg-[color-mix(in_srgb,var(--c-bg)_90%,transparent)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
           {NAV.map((n) => (
             <button
               key={n.v}

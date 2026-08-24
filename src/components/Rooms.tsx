@@ -142,7 +142,7 @@ export default function Rooms({ localMedia, ensureLocal, onToast, initialJoin }:
     }
     setSearching(true);
     log(t("room.searching"));
-    await simulateMatch({ gender: "any", lang: "uk", tags: [] }, () => {}, true);
+    await simulateMatch({ gender: "any", lang: "uk", tags: [] }, true);
     if (!alive.current) return;
     const g = spawnGuest();
     setRoom((r) => (r ? { ...r, guests: [...r.guests, g] } : r));
@@ -167,7 +167,7 @@ export default function Rooms({ localMedia, ensureLocal, onToast, initialJoin }:
     kick(id);
     setSearching(true);
     log(t("room.searching"));
-    await simulateMatch({ gender: "any", lang: "uk", tags: [] }, () => {}, true);
+    await simulateMatch({ gender: "any", lang: "uk", tags: [] }, true);
     if (!alive.current) return;
     const g = spawnGuest();
     setRoom((r) => (r ? { ...r, guests: [...r.guests, g] } : r));
