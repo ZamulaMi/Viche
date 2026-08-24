@@ -1,0 +1,84 @@
+# Viche — анонімні відеозбори
+
+Платформа миттєвого анонімного відео/аудіо спілкування: **рулетка** (випадкові пари),
+**приватні кімнати** з гібридним режимом *Add Random / Kick & Replace*, модерація
+(капча, мат-фільтр, автобан IP за скаргами). Медіа — **P2P WebRTC (DTLS/SRTP)**:
+сервер не торкається відео.
+
+| Шар | Технології |
+|---|---|
+| Сигналінг | Go 1.22, gorilla/websocket, stateless-вузли |
+| Синхронізація | Redis 7: Pub/Sub, черги, rate limit, бани (TTL) |
+| Довге зберігання | PostgreSQL 16: користувачі, скарги, кімнати |
+| NAT traversal | coturn (TURN/STUN, long-term credentials) |
+| Фронтенд | React 18 + Vite + Tailwind 4, i18n (UK/EN), dark/light |
+| Медіа | WebRTC P2P, DTLS/SRTP; canvas-аватари 15 FPS (економія CPU/RAM) |
+
+## Швидкий старт
+
+```bash
+# 1) Увесь стек (Go + Postgres + Redis + coturn + nginx):
+docker compose up -d --build
+
+# 2) Фронт (якщо ще не зібрано):
+npm install && npm run build     # dist/ віддає контейнер viche-web
+
+# 3) Відкрити:
+open http://localhost:3000       # сигналінг: ws://localhost:8080/ws
+```
+
+Лише фронт у демо-режимі (сигналінг емулюється у браузері, WebRTC-конвеєр справжній):
+
+```bash
+npm install
+npm run dev
+```
+
+Горизонтальне масштабування сигналінгу:
+
+```bash
+docker compose up -d --scale viche-server=4
+```
+
+## Структура
+
+```
+server/
+  main.go        — init: PG, Redis, HTTP/WS, graceful shutdown
+  handler.go     — WS handshake, капча/бан-чек, pumps, маршрутизація
+  matcher.go     — шардовані черги пар + Redis Pub/Sub (крос-інстанс)
+  room.go        — кімнати, add_random, kick_replace, крос-вузловий ефір
+  moderation.go  — скарги→бан IP (ZSET+SETEX), мат-фільтр, капча, rate limit
+src/
+  App.tsx        — shell: теми, i18n, навігація, тікер, тости
+  i18n.tsx       — словники UK/EN
+  lib/rtc.ts     — getUserMedia, loopback RTCPeerConnection (демо)
+  lib/sim.ts     — демо-матчер (у продакшн замінюється WS-клієнтом)
+  components/    — Roulette, VideoChat, Rooms, Captcha, Architecture
+docker-compose.yml · deploy/{nginx.conf,schema.sql} · server/Dockerfile
+```
+
+## WS-протокол
+
+Єдиний JSON-конверт `{type, payload}`. Основні типи:
+`hello`, `match.join`, `match.next`, `match.found`,
+`rtc.offer / rtc.answer / rtc.ice`, `chat.msg`, `report.user`,
+`room.create / room.join / room.leave / room.add_random / room.kick_replace`.
+
+## Модерація
+
+- **Капча** — математична задача перед першим WS (HMAC-токен, TTL 10 хв;
+  у продакшн — hCaptcha).
+- **Скарги** — sliding window `ZADD reports:{ip}` (TTL 24 год);
+  ≥ 3 скарг → `SETEX ban:{ip}` на 24 год + роз'єднання сесій через Pub/Sub.
+- **Мат-фільтр** — словник uk/en/ru, нормалізація проти обфускації
+  (`ф.у.к` → `фук`), клієнтська і серверна сторона.
+- **Rate limit** — 10 msg/сек на IP (`INCR` + `EXPIRE`).
+
+## Масштабування
+
+- Кожен Go-вузол **stateless** — за будь-яким LB, без sticky-сесій.
+- Матчер шардований за хешем мови+тегів; пари синхронізуються Redis Pub/Sub.
+- Стан кімнат — Redis (`room:{id}`, `room:{id}:peers`), медіа-сигнали —
+  канал `viche:room:{id}`.
+- TURN (coturn) як relay-fallback для суворих NAT/фаєрволів.
