@@ -48,12 +48,15 @@ export type MatchHooks = {
 type Waiter = { kind: "self" } | { kind: "guest"; conn: DataConnection; id: string };
 type Msg = { type: "hello" } | { type: "wait" } | { type: "pair"; with: string; initiator: boolean };
 
-/* ГЛОБАЛЬНИЙ трафік: медіа завжди через TURN-relay (iceTransportPolicy:
-   "relay") — LAN-кандидати не використовуються взагалі. Кілька незалежних
-   TURN (UDP + TCP + TLS) — ICE пробує всі паралельно, виграє робочий,
-   тож глобальний пошук не залежить від падіння одного сервісу.
-   Власний coturn (docker-compose): VITE_TURN_URL / _USERNAME / _CREDENTIAL. */
-const env = ((import.meta as unknown as { env?: Record<string, string | undefined> }).env) ?? {};
+/* NAT traversal + глобальні з'єднання.
+   За замовчуванням — повний ICE-каскад (host → srflx/STUN → relay/TURN):
+   браузер сам обирає найкращий робочий шлях, тому з'єднання встановлюється
+   і локально, і глобально. Google STUN покриває більшість домашніх мереж
+   (cone-NAT) без TURN; публічні TURN — резерв для симетричних NAT.
+   VITE_RELAY_ONLY=true + VITE_TURN_URL — примусово ТІЛЬКИ relay через ваш
+   coturn (приватність + гарантований глобальний трафік). Реквізити свого
+   TURN: VITE_TURN_URL / VITE_TURN_USERNAME / VITE_TURN_CREDENTIAL. */
+const env = import.meta.env;
 const customTurn: RTCIceServer[] = env.VITE_TURN_URL
   ? [
       {
@@ -64,10 +67,24 @@ const customTurn: RTCIceServer[] = env.VITE_TURN_URL
     ]
   : [];
 
+const relayOnly = env.VITE_RELAY_ONLY === "true" || env.VITE_RELAY_ONLY === "1";
+
 export const iceConfig: RTCConfiguration = {
   iceServers: [
     ...customTurn,
-    // Metered Open Relay — безкоштовний публічний TURN
+    // STUN — визначає публічні адреси (srflx-кандидати). Більшість
+    // глобальних з'єднань між домашніми мережами (cone-NAT) проходять
+    // саме через STUN — без жодного TURN. Google STUN — найнадійніший.
+    {
+      urls: [
+        "stun:stun.l.google.com:19302",
+        "stun:stun1.l.google.com:19302",
+        "stun:stun2.l.google.com:19302",
+      ],
+    },
+    // Публічні TURN — best-effort для симетричних NAT (мобільні
+    // оператори, подвійний NAT). Реквізити часто ротуються, тому це
+    // резерв, а не основа. Власний coturn (compose) — VITE_TURN_URL.
     {
       urls: [
         "turn:openrelay.metered.ca:80",
@@ -78,17 +95,20 @@ export const iceConfig: RTCConfiguration = {
       username: "openrelayproject",
       credential: "openrelayproject",
     },
-    // Резервний публічний TURN (Nextcloud demo)
     {
       urls: "turn:demo.nextcloud.com:443?transport=tcp",
       username: "nextcloud",
       credential: "nextcloud",
     },
   ],
-  // ТІЛЬКИ глобальний трафік: жодних host/LAN-кандидатів — уся медіа
-  // йде через TURN-relay. Гарантовано з'єднує пари за будь-яким NAT
-  // (симетричний, подвійний, carrier-grade) у будь-якій мережі.
-  iceTransportPolicy: "relay",
+  // Повний ICE-каскад: host → srflx (STUN) → relay (TURN). Браузер
+  // пробує всі шляхи і обирає найкращий робочий — з'єднання встановлюється
+  // і в локальній, і в глобальній мережі, незалежно від типу NAT.
+  //
+  // VITE_RELAY_ONLY=true — примусово ТІЛЬКИ relay (усі медіа через ваш
+  // coturn): максимальна приватність + гарантований глобальний трафік,
+  // але потрібен робочий TURN (VITE_TURN_URL), інакше з'єднань не буде.
+  ...(relayOnly ? { iceTransportPolicy: "relay" as RTCIceTransportPolicy } : {}),
   iceCandidatePoolSize: 2,
 };
 
