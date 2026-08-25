@@ -33,7 +33,7 @@ export type CanvasCtl = {
    достатньо, а CPU навантаження мінімальне.                   */
 export function makeCanvasStream(label: string, hue: number): CanvasCtl {
   const W = 640;
-  const H = 360;
+  const H = 480; // 4:3 — базовий формат сцени Viche
   const canvas = document.createElement("canvas");
   canvas.width = W;
   canvas.height = H;
@@ -138,8 +138,13 @@ export type LocalMedia = CanvasCtl & { stream: MediaStream; hasCam: boolean };
 
 export async function getLocalStream(): Promise<LocalMedia> {
   try {
+    // горизонтальна камера → 4:3; телефон у вертикалі сам віддасть 3:4
     const s = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 640 }, height: { ideal: 480 } },
+      video: {
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+        aspectRatio: { ideal: 4 / 3 },
+      },
       audio: true,
     });
     return {

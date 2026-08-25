@@ -1,456 +1,644 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { makePeer, roomId as genRoomId, simulateMatch, type Peer } from "../lib/sim";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { RoomNet, type Member, type RoomStatus } from "../lib/roomnet";
+import {
+  filterProfanity,
+  makePeer,
+  makeRoomId,
+  now,
+  roomLink,
+  roomIdStr,
+  shortId,
+  simulateMatch,
+  type Peer as SimPeer,
+  type RoomId,
+} from "../lib/sim";
 import { makeCanvasStream, type CanvasCtl, type LocalMedia } from "../lib/rtc";
 import { useI18n } from "../i18n";
+import { useScramble } from "../lib/hooks";
 import {
+  IconCheck,
   IconClose,
   IconCopy,
+  IconEnd,
   IconLink,
+  IconMicOff,
   IconPlus,
-  IconRefresh,
   IconRooms,
+  IconSend,
   IconUserPlus,
 } from "./icons";
 
-type Guest = { peer: Peer; ctl: CanvasCtl; stream: MediaStream };
-type Room = { id: string; name: string; seats: number; guests: Guest[]; admin: boolean };
-type Recent = { id: string; name: string };
+type DemoGuest = { peer: SimPeer; ctl: CanvasCtl; stream: MediaStream };
+type ChatMsg = {
+  id: number;
+  kind: "sys" | "msg";
+  name?: string;
+  text: string;
+  time: string;
+  you?: boolean;
+};
+type StoredRoom = { number: string; code: string; ts: number };
 
 type Props = {
   localMedia: LocalMedia | null;
   ensureLocal: () => Promise<LocalMedia>;
   onToast: (msg: string, kind?: "ok" | "warn") => void;
-  initialJoin?: string | null;
+  initialJoin: RoomId | null;
 };
 
+let mid = 0;
 const RECENT_KEY = "viche:rooms";
-const loadRecent = (): Recent[] => {
+const NAME_KEY = "viche:name";
+
+const loadRecent = (): StoredRoom[] => {
   try {
-    return JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+    return JSON.parse(localStorage.getItem(RECENT_KEY) || "[]") as StoredRoom[];
   } catch {
     return [];
   }
 };
+const saveRecent = (r: RoomId) => {
+  try {
+    const list = [{ number: r.number, code: r.code, ts: Date.now() }, ...loadRecent().filter((x) => x.number !== r.number)].slice(0, 6);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(list));
+  } catch {
+    /* noop */
+  }
+};
+
+/* ── Плитка відео: 4:3 для горизонтального, 3:4 для вертикального, без обрізки ── */
+function Tile({
+  stream,
+  name,
+  badge,
+  badgeTone = "mint",
+  muted,
+  onKick,
+  kickLabel,
+}: {
+  stream: MediaStream;
+  name: string;
+  badge?: string;
+  badgeTone?: "mint" | "amber" | "faint";
+  muted?: boolean;
+  onKick?: () => void;
+  kickLabel?: string;
+}) {
+  const ref = useRef<HTMLVideoElement>(null);
+  const [port, setPort] = useState(false);
+  useEffect(() => {
+    const v = ref.current;
+    if (!v) return;
+    v.srcObject = stream;
+    v.onloadedmetadata = () => {
+      setPort(v.videoWidth > 0 && v.videoHeight > 0 && v.videoWidth < v.videoHeight);
+      v.play().catch(() => {});
+    };
+    v.play().catch(() => {});
+  }, [stream]);
+  const tone =
+    badgeTone === "mint"
+      ? "text-[var(--c-mint)] border-[color-mix(in_srgb,var(--c-mint)_45%,transparent)]"
+      : badgeTone === "amber"
+        ? "text-[var(--c-amber)] border-[color-mix(in_srgb,var(--c-amber)_45%,transparent)]"
+        : "text-[var(--c-faint)] border-[var(--c-line2)]";
+  return (
+    <div className={`group relative w-full ${port ? "aspect-[3/4] max-w-[300px] mx-auto" : "aspect-[4/3]"} rounded-xl overflow-hidden border border-[var(--c-line)] bg-black`}>
+      <video ref={ref} autoPlay playsInline muted={muted} className="absolute inset-0 w-full h-full object-contain" />
+      <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 px-3 py-2 bg-gradient-to-t from-black/75 to-transparent">
+        <span className="text-[13px] font-700 text-white truncate">{name}</span>
+        {muted && <IconMicOff className="w-3.5 h-3.5 text-white/70 flex-none" />}
+      </div>
+      {badge && (
+        <span className={`absolute top-2 left-2 font-mono text-[10px] px-2 py-0.5 rounded-md border bg-black/55 backdrop-blur-sm ${tone}`}>
+          {badge}
+        </span>
+      )}
+      {onKick && (
+        <button
+          className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity grid place-items-center w-8 h-8 rounded-lg bg-black/60 border border-[color-mix(in_srgb,var(--c-red)_55%,transparent)] text-[var(--c-red)] hover:bg-[color-mix(in_srgb,var(--c-red)_18%,black)]"
+          onClick={onKick}
+          title={kickLabel}
+          aria-label={kickLabel}
+        >
+          <IconClose className="w-4 h-4" />
+        </button>
+      )}
+    </div>
+  );
+}
 
 export default function Rooms({ localMedia, ensureLocal, onToast, initialJoin }: Props) {
   const { t } = useI18n();
-  const [room, setRoom] = useState<Room | null>(null);
-  const [name, setName] = useState("");
+  const titleWord = useScramble(t("room.title"), 120);
+
+  const [screen, setScreen] = useState<"home" | "room">("home");
+  const [name, setName] = useState(() => {
+    try {
+      return localStorage.getItem(NAME_KEY) || "";
+    } catch {
+      return "";
+    }
+  });
   const [seats, setSeats] = useState(4);
-  const [joinId, setJoinId] = useState("");
-  const [joinErr, setJoinErr] = useState(false);
-  const [recent, setRecent] = useState<Recent[]>(loadRecent);
+  const [joinNum, setJoinNum] = useState("");
+  const [joinCode, setJoinCode] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const [room, setRoom] = useState<RoomId | null>(null);
+  const [status, setStatus] = useState<RoomStatus | null>(null);
+  const [roster, setRoster] = useState<Member[]>([]);
+  const [streams, setStreams] = useState<Record<string, MediaStream>>({});
+  const [demoGuests, setDemoGuests] = useState<DemoGuest[]>([]);
   const [searching, setSearching] = useState(false);
-  const [inviteOpen, setInviteOpen] = useState(false);
-  const [friendId, setFriendId] = useState("");
-  const [inviting, setInviting] = useState(false);
-  const [burstId, setBurstId] = useState<string | null>(null);
-  const [speaking, setSpeaking] = useState<Record<string, boolean>>({});
-  const [activity, setActivity] = useState<string[]>([]);
-  const localRef = useRef<HTMLVideoElement>(null);
-  const alive = useRef(true);
+  const [msgs, setMsgs] = useState<ChatMsg[]>([]);
+  const [draft, setDraft] = useState("");
+  const [recents, setRecents] = useState<StoredRoom[]>(loadRecent);
+
+  const netRef = useRef<RoomNet | null>(null);
+  const creatorRef = useRef(false);
+  const aliveRef = useRef(true);
+  const prevRoster = useRef<Member[]>([]);
+  const listRef = useRef<HTMLDivElement>(null);
+  const joinedOnce = useRef(false);
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
+
+  const push = useCallback((kind: ChatMsg["kind"], text: string, extra?: Partial<ChatMsg>) => {
+    setMsgs((m) => [...m.slice(-80), { id: ++mid, kind, text, time: now(), ...extra }]);
+  }, []);
 
   useEffect(() => {
-    alive.current = true;
+    aliveRef.current = true;
     return () => {
-      alive.current = false;
+      aliveRef.current = false;
+      netRef.current?.leave();
+      netRef.current = null;
     };
   }, []);
-  useEffect(() => {
-    if (initialJoin) setJoinId(initialJoin);
-  }, [initialJoin]);
 
-  /* локальне відео у плитці */
   useEffect(() => {
-    const v = localRef.current;
-    if (v && localMedia?.isReal) {
-      v.srcObject = localMedia.stream;
-      v.play().catch(() => {});
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [msgs]);
+
+  /* системні повідомлення про вхід/вихід за різницею ростеру */
+  useEffect(() => {
+    const prev = prevRoster.current;
+    if (prev.length && screen === "room") {
+      const added = roster.filter((m) => !prev.some((p) => p.id === m.id));
+      const gone = prev.filter((p) => !roster.some((m) => m.id === p.id));
+      added.forEach((m) => push("sys", `${m.name} ${tRef.current("room.guestJoined")}`));
+      gone.forEach((m) => push("sys", `${m.name} ${tRef.current("room.guestLeft")}`));
     }
-  }, [localMedia, room]);
+    prevRoster.current = roster;
+  }, [roster, screen, push]);
 
-  /* індикатори мовлення гостей */
-  useEffect(() => {
-    if (!room) return;
-    const iv = window.setInterval(() => {
-      const map: Record<string, boolean> = {};
-      room.guests.forEach((g) => {
-        const s = Math.random() > 0.5;
-        map[g.peer.id] = s;
-        g.ctl.setSpeaking(s);
-      });
-      setSpeaking(map);
-    }, 2300);
-    return () => window.clearInterval(iv);
-  }, [room]);
-
-  const saveRecent = (r: Recent) => {
-    setRecent((prev) => {
-      const next = [r, ...prev.filter((x) => x.id !== r.id)].slice(0, 5);
-      try {
-        localStorage.setItem(RECENT_KEY, JSON.stringify(next));
-      } catch {
-        /* noop */
-      }
-      return next;
+  const leaveRoom = useCallback(() => {
+    netRef.current?.leave();
+    netRef.current = null;
+    setDemoGuests((gs) => {
+      gs.forEach((g) => g.ctl.close());
+      return [];
     });
-  };
-  const log = (s: string) => setActivity((a) => [...a.slice(-6), s]);
-
-  const createRoom = async () => {
-    await ensureLocal();
-    const id = genRoomId();
-    setRoom({ id, name: name.trim() || "Viche Room", seats, guests: [], admin: true });
-    saveRecent({ id, name: name.trim() || "Viche Room" });
-    setActivity([]);
-    log(`${t("room.youAdmin")} · ${id}`);
-  };
-
-  const joinRoom = async (idRaw: string) => {
-    const id = idRaw.trim().toUpperCase();
-    if (!/^VCH-[0-9A-F]{6}$/.test(id)) {
-      setJoinErr(true);
-      window.setTimeout(() => setJoinErr(false), 600);
-      return;
-    }
-    await ensureLocal();
-    setRoom({ id, name: "Room " + id.slice(4), seats: 4, guests: [], admin: false });
-    saveRecent({ id, name: "Room " + id.slice(4) });
-    setActivity([]);
-    log(`${t("room.enter")} → ${id}`);
-  };
-
-  const stopGuests = (r: Room | null) => r?.guests.forEach((g) => g.ctl.close());
-
-  const leaveRoom = () => {
-    stopGuests(room);
+    setScreen("home");
     setRoom(null);
+    setStatus(null);
+    setRoster([]);
+    prevRoster.current = [];
+    setStreams({});
+    setMsgs([]);
     setSearching(false);
-  };
-
-  const spawnGuest = useCallback((peer?: Peer): Guest => {
-    const p = peer ?? makePeer();
-    const ctl = makeCanvasStream(p.name.split("_")[1] ?? "GG", p.hue);
-    return { peer: p, ctl, stream: ctl.stream };
   }, []);
 
+  const openRoom = useCallback(
+    async (r: RoomId, asCreator: boolean) => {
+      setBusy(true);
+      try {
+        const lm = await ensureLocal();
+        if (!aliveRef.current) return;
+        creatorRef.current = asCreator;
+        setRoom(r);
+        setScreen("room");
+        setMsgs([]);
+        prevRoster.current = [];
+        setRoster([]);
+        setStreams({});
+        saveRecent(r);
+        setRecents(loadRecent());
+        const net = new RoomNet(r, name.trim() || "Гість_" + shortId(4), lm.stream, seats, {
+          onStatus: (s) => {
+            if (!aliveRef.current) return;
+            setStatus(s);
+            if (s === "host") {
+              push("sys", tRef.current("room.sHost"));
+            } else if (s === "guest") {
+              push("sys", tRef.current("room.sGuest"));
+            } else if (s === "exists" && creatorRef.current) {
+              onToast(tRef.current("room.errExists"), "warn");
+              netRef.current?.leave();
+              void openRoom(makeRoomId(), true);
+            } else if (s === "not-found") {
+              onToast(tRef.current("room.errNotFound"), "warn");
+              leaveRoom();
+            } else if (s === "full") {
+              onToast(tRef.current("room.errFull"), "warn");
+              leaveRoom();
+            } else if (s === "closed" && prevRoster.current.length > 0) {
+              onToast(tRef.current("room.errClosed"), "warn");
+              leaveRoom();
+            }
+          },
+          onRoster: (members) => aliveRef.current && setRoster(members),
+          onPeerStream: (pid, s) => aliveRef.current && setStreams((st) => ({ ...st, [pid]: s })),
+          onPeerGone: (pid) =>
+            aliveRef.current &&
+            setStreams((st) => {
+              const cp = { ...st };
+              delete cp[pid];
+              return cp;
+            }),
+          onChat: (_from, fromName, text) => {
+            if (!aliveRef.current) return;
+            const { text: clean, flagged } = filterProfanity(text);
+            push("msg", clean, { name: fromName });
+            if (flagged) push("sys", tRef.current("chat.warn"));
+          },
+          onKicked: () => {
+            if (!aliveRef.current) return;
+            onToast(tRef.current("room.kicked"), "warn");
+            leaveRoom();
+          },
+        });
+        netRef.current = net;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [ensureLocal, leaveRoom, name, onToast, push, seats]
+  );
+
+  /* вхід за лінком (?room=…&code=…) */
+  useEffect(() => {
+    if (initialJoin && !joinedOnce.current) {
+      joinedOnce.current = true;
+      void openRoom(initialJoin, false);
+    }
+  }, [initialJoin, openRoom]);
+
+  const createRoom = () => {
+    try {
+      localStorage.setItem(NAME_KEY, name.trim());
+    } catch {
+      /* noop */
+    }
+    void openRoom(makeRoomId(), true);
+  };
+
+  const joinRoom = () => {
+    // підтримка вставленого «123456-ABCD» цілком у будь-яке поле:
+    // перші 6 цифр — номер, наступні 4 знаки — код
+    const raw = (joinNum + joinCode).toUpperCase().replace(/[^0-9A-Z]/g, "");
+    const number = raw.slice(0, 6);
+    const code = raw.slice(6, 10);
+    if (!/^\d{6}$/.test(number) || code.length !== 4) {
+      onToast(t("room.invalid"), "warn");
+      return;
+    }
+    void openRoom({ number, code }, false);
+  };
+
+  const copyText = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      onToast(t("toast.copied"), "ok");
+    } catch {
+      onToast(t("toast.copied"), "warn");
+    }
+  };
+
+  const shareLink = async () => {
+    if (!room) return;
+    const url = roomLink(room);
+    const nav = navigator as Navigator & { share?: (d: { url: string }) => Promise<void> };
+    if (nav.share) {
+      try {
+        await nav.share({ url });
+        return;
+      } catch {
+        /* скасовано */
+      }
+    }
+    await copyText(url);
+  };
+
+  /* Add Random — гібридна фішка: демо-гість із «пулу рулетки» */
   const addRandom = async () => {
-    if (!room || searching) return;
-    if (room.guests.length >= room.seats - 1) {
-      onToast(`${room.seats - 1} ${t("room.guests")} max`, "warn");
+    if (searching || !netRef.current) return;
+    if (roster.length + demoGuests.length >= seats) {
+      onToast(`${t("room.seats")}: ${seats}`, "warn");
       return;
     }
     setSearching(true);
-    log(t("room.searching"));
     await simulateMatch({ gender: "any", lang: "uk", tags: [] }, true);
-    if (!alive.current) return;
-    const g = spawnGuest();
-    setRoom((r) => (r ? { ...r, guests: [...r.guests, g] } : r));
-    log(`${g.peer.name} ${t("room.guestJoined")}`);
+    if (!aliveRef.current) return;
+    const p = makePeer();
+    const ctl = makeCanvasStream(p.name.split("_")[1] ?? "GG", p.hue);
+    setDemoGuests((gs) => [...gs, { peer: p, ctl, stream: ctl.stream }]);
+    push("sys", `${p.name} ${t("room.guestJoined")} · ${t("room.demoBadge")}`);
     setSearching(false);
   };
 
-  const kick = (id: string) => {
-    setRoom((r) => {
-      if (!r) return r;
-      const g = r.guests.find((x) => x.peer.id === id);
+  const kickDemo = (id: string) => {
+    setDemoGuests((gs) => {
+      const g = gs.find((x) => x.peer.id === id);
       g?.ctl.close();
-      if (g) log(`${g.peer.name} ${t("room.guestLeft")}`);
-      return { ...r, guests: r.guests.filter((x) => x.peer.id !== id) };
+      if (g) push("sys", `${g.peer.name} ${t("room.guestLeft")}`);
+      return gs.filter((x) => x.peer.id !== id);
     });
   };
 
-  const replace = async (id: string) => {
-    if (searching) return;
-    setBurstId(id);
-    window.setTimeout(() => setBurstId(null), 480);
-    kick(id);
-    setSearching(true);
-    log(t("room.searching"));
-    await simulateMatch({ gender: "any", lang: "uk", tags: [] }, true);
-    if (!alive.current) return;
-    const g = spawnGuest();
-    setRoom((r) => (r ? { ...r, guests: [...r.guests, g] } : r));
-    log(`${g.peer.name} ${t("room.guestJoined")}`);
-    setSearching(false);
+  const replaceDemo = async (id: string) => {
+    kickDemo(id);
+    await addRandom();
   };
 
-  const inviteFriend = () => {
-    if (!room || inviting) return;
-    const raw = friendId.trim().toUpperCase().replace(/^VCH-/, "");
-    const p = makePeer({ name: raw ? "Гість_" + raw.slice(-4) : undefined, id: raw.slice(-6) || undefined });
-    setInviting(true);
-    log(t("room.invSent") + (raw ? ` → ${p.name}` : ""));
-    window.setTimeout(() => {
-      if (!alive.current) return;
-      const g = spawnGuest(p);
-      setRoom((r) => {
-        if (!r) return r;
-        if (r.guests.length >= r.seats - 1) return r;
-        return { ...r, guests: [...r.guests, g] };
-      });
-      log(`${p.name} ${t("room.guestJoined")}`);
-      setInviting(false);
-      setFriendId("");
-    }, 2400);
+  const send = () => {
+    const raw = draft.trim();
+    if (!raw || !netRef.current) return;
+    const { text, flagged } = filterProfanity(raw);
+    push("msg", text, { you: true, name: t("room.you") });
+    setDraft("");
+    if (flagged) push("sys", t("chat.warn"));
+    netRef.current.sendChat(text);
   };
 
-  const copyLink = async () => {
-    if (!room) return;
-    const url = `${location.origin}${location.pathname}?room=${room.id}`;
-    try {
-      await navigator.clipboard.writeText(url);
-    } catch {
-      const ta = document.createElement("textarea");
-      ta.value = url;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      ta.remove();
-    }
-    onToast(t("toast.copied"), "ok");
-  };
+  const isHost = !!room && status === "host";
+  const link = room ? roomLink(room) : "";
+  const filled = roster.length + demoGuests.length;
 
   /* ── Екран кімнати ── */
-  if (room) {
-    const freeSeats = room.seats - 1 - room.guests.length;
+  if (screen === "room" && room) {
     return (
-      <div className="card overflow-hidden fadeup">
-        <div className="flex flex-wrap items-center gap-3 px-4 sm:px-5 py-3.5 border-b border-[var(--c-line)] bg-[var(--c-panel)]">
-          <span className="led led-mint" />
+      <div className="fadeup">
+        <div className="flex flex-wrap items-center gap-3 mb-5">
           <div className="min-w-0">
-            <h2 className="font-display font-700 text-lg leading-tight truncate">{room.name}</h2>
-            <p className="font-mono text-[11px] text-[var(--c-dim)]">
-              {t("room.live")} · {room.guests.length}/{room.seats - 1} {t("room.guests")}
-              {room.admin && <span className="text-[var(--c-amber)]"> · {t("room.youAdmin")}</span>}
-            </p>
+            <p className="panel-title">{t("room.live")}</p>
+            <h1 className="font-display font-900 text-xl sm:text-2xl tracking-tight flex items-center gap-2.5">
+              №{room.number}
+              <span className="text-[var(--c-amber)]">·</span>
+              <span className="text-[var(--c-amber)]">{room.code}</span>
+            </h1>
           </div>
-          <span className="tick-id text-[12px]">{room.id}</span>
-          <div className="ml-auto flex items-center gap-2">
-            <button className="btn" onClick={copyLink}>
-              <IconLink className="w-4 h-4" /> <span className="hidden sm:inline">{t("room.copyLink")}</span>
-            </button>
-            <button className="btn" onClick={() => setInviteOpen(true)}>
-              <IconUserPlus className="w-4 h-4" /> <span className="hidden sm:inline">{t("room.invite")}</span>
-            </button>
-            <button className="btn btn-red" onClick={leaveRoom}>
-              {t("room.leave")}
-            </button>
-          </div>
+          <span
+            className={`chip !cursor-default !text-[11px] font-mono ${
+              status === "host" || status === "guest" ? "chip-on" : ""
+            }`}
+          >
+            {status === "host" ? t("room.sHost") : status === "guest" ? t("room.sGuest") : t("room.sConnecting")}
+          </span>
+          <span className="chip !cursor-default !text-[11px] font-mono">
+            {filled}/{seats} · {t("room.members").toLowerCase()}
+          </span>
+          <button className="btn btn-red ml-auto" onClick={leaveRoom}>
+            <IconEnd className="w-4 h-4" />
+            {t("room.leave")}
+          </button>
         </div>
 
-        <div className="p-4 sm:p-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {/* своя плитка */}
-          <div className="relative aspect-video rounded-xl overflow-hidden border border-[var(--c-line2)] bg-[var(--c-bg2)] group">
-            {localMedia?.isReal ? (
-              <video ref={localRef} autoPlay playsInline muted className="w-full h-full object-cover -scale-x-100" />
-            ) : (
-              <div className="w-full h-full grid place-items-center">
-                <span className="font-display text-3xl text-[var(--c-amber)]">TI</span>
-              </div>
+        <div className="grid lg:grid-cols-[minmax(0,1fr)_330px] gap-4 items-start">
+          {/* ── Сітка учасників ── */}
+          <div className="min-w-0">
+            <div className="grid sm:grid-cols-2 gap-3">
+              {/* реальні учасники (mesh P2P) */}
+              {roster.map((m) => {
+                const self = netRef.current?.myId === m.id;
+                const st = self ? localMedia?.stream : streams[m.id];
+                return st ? (
+                  <Tile
+                    key={m.id}
+                    stream={st}
+                    name={self ? `${m.name} · ${t("room.you")}` : m.name}
+                    badge={self ? t("room.you") : m.id === netRef.current?.hostId ? t("room.admin") : "p2p"}
+                    badgeTone={self ? "amber" : "mint"}
+                    muted={self}
+                    onKick={isHost && !self ? () => netRef.current?.kick(m.id) : undefined}
+                    kickLabel={t("room.kick")}
+                  />
+                ) : (
+                  <div key={m.id} className="aspect-[4/3] rounded-xl border border-dashed border-[var(--c-line2)] grid place-items-center bg-[var(--c-bg2)]">
+                    <p className="font-mono text-[11px] text-[var(--c-faint)] caret">{m.name} · p2p…</p>
+                  </div>
+                );
+              })}
+              {/* демо-гості (гібридний режим) */}
+              {demoGuests.map((g) => (
+                <div key={g.peer.id} className="relative">
+                  <Tile
+                    stream={g.stream}
+                    name={g.peer.name}
+                    badge={t("room.demoBadge")}
+                    badgeTone="faint"
+                    onKick={isHost ? () => kickDemo(g.peer.id) : undefined}
+                    kickLabel={t("room.kick")}
+                  />
+                  {isHost && (
+                    <button
+                      className="absolute -bottom-2.5 right-3 chip !text-[11px] !py-1 shadow-[var(--c-shadow)]"
+                      onClick={() => void replaceDemo(g.peer.id)}
+                    >
+                      <IconUserPlus className="w-3.5 h-3.5" />
+                      {t("room.replace")}
+                    </button>
+                  )}
+                </div>
+              ))}
+              {/* вільні місця */}
+              {Array.from({ length: Math.max(0, seats - filled) }).map((_, i) => (
+                <div key={"e" + i} className="aspect-[4/3] rounded-xl border border-dashed border-[var(--c-line)] grid place-items-center bg-[color-mix(in_srgb,var(--c-bg2)_60%,transparent)]">
+                  <p className="font-mono text-[11px] text-[var(--c-faint)]">{t("room.emptySeat")}</p>
+                </div>
+              ))}
+            </div>
+
+            {isHost && (
+              <button className="btn mt-4" onClick={() => void addRandom()} disabled={searching || filled >= seats}>
+                <IconPlus className="w-4 h-4" />
+                {searching ? t("room.searching") : t("room.addRandom")}
+              </button>
             )}
-            <div className="absolute inset-x-0 bottom-0 px-3 py-2 bg-gradient-to-t from-black/70 to-transparent flex items-center gap-2">
-              <span className="led led-mint" />
-              <span className="font-mono text-[11px] tracking-widest text-white">{t("video.you")} · {t("room.admin")}</span>
-            </div>
           </div>
 
-          {/* гості */}
-          {room.guests.map((g) => (
-            <div key={g.peer.id} className="relative aspect-video rounded-xl overflow-hidden border border-[var(--c-line2)] bg-black group fadeup">
-              <GuestVideo stream={g.stream} />
-              {burstId === g.peer.id && <div className="absolute inset-0 staticburst opacity-60 z-10 pointer-events-none" />}
-              <div className="absolute inset-x-0 bottom-0 px-3 py-2 bg-gradient-to-t from-black/75 to-transparent">
-                <div className="flex items-center gap-2">
-                  <span className={`led ${speaking[g.peer.id] ? "led-mint" : ""}`} />
-                  <span className="font-mono text-[11px] tracking-wide text-white truncate">{g.peer.name}</span>
-                  <span className="font-mono text-[10px] text-white/50">{g.peer.ping} ms</span>
-                </div>
-                <p className="font-mono text-[10px] text-white/45 mt-0.5">{g.peer.tags.map((x) => "#" + x).join(" ")}</p>
-              </div>
-              {room.admin && (
-                <div className="absolute top-2 right-2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity z-20">
-                  <button
-                    className="grid place-items-center w-8 h-8 rounded-lg bg-[color-mix(in_srgb,var(--c-bg)_75%,transparent)] backdrop-blur border border-[var(--c-line)] text-[var(--c-amber)] hover:border-[var(--c-amber)] transition-colors"
-                    title={t("room.replace")}
-                    onClick={() => replace(g.peer.id)}
-                  >
-                    <IconRefresh className="w-4 h-4" />
-                  </button>
-                  <button
-                    className="grid place-items-center w-8 h-8 rounded-lg bg-[color-mix(in_srgb,var(--c-bg)_75%,transparent)] backdrop-blur border border-[var(--c-line)] text-[var(--c-red)] hover:border-[var(--c-red)] transition-colors"
-                    title={t("room.kick")}
-                    onClick={() => kick(g.peer.id)}
-                  >
-                    <IconClose className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
-            </div>
-          ))}
-
-          {/* пошук гостя */}
-          {searching && (
-            <div className="relative aspect-video rounded-xl overflow-hidden border border-[var(--c-mint)] bg-[var(--c-bg2)] grid place-items-center">
-              <div className="absolute w-40 h-40 rounded-full radar-sweep opacity-60" />
-              <p className="relative font-mono text-[12px] text-[var(--c-mint)] caret">{t("room.searching")}</p>
-            </div>
-          )}
-
-          {/* Add Random */}
-          {!searching && room.admin && freeSeats > 0 && (
-            <button
-              onClick={addRandom}
-              className="aspect-video rounded-xl border-2 border-dashed border-[var(--c-line2)] hover:border-[var(--c-amber)] bg-[var(--c-bg2)] hover:bg-[color-mix(in_srgb,var(--c-amber)_7%,var(--c-bg2))] transition-all grid place-items-center group/add"
-            >
-              <span className="flex flex-col items-center gap-2 text-[var(--c-dim)] group-hover/add:text-[var(--c-amber)] transition-colors">
-                <IconPlus className="w-7 h-7" />
-                <span className="font-700 text-[14px]">{t("room.addRandom")}</span>
-                <span className="font-mono text-[10px] opacity-70">roulette pool → room</span>
-              </span>
-            </button>
-          )}
-
-          {/* вільні місця */}
-          {!searching &&
-            Array.from({ length: Math.max(0, freeSeats - (room.admin ? 1 : 0)) }).map((_, i) => (
-              <div key={i} className="aspect-video rounded-xl border border-[var(--c-line)] bg-[var(--c-bg2)] grid place-items-center">
-                <span className="font-mono text-[11px] text-[var(--c-faint)]">seat {room.guests.length + i + 2} · empty</span>
-              </div>
-            ))}
-        </div>
-
-        <div className="px-4 sm:px-5 pb-4">
-          <div className="rounded-lg border border-[var(--c-line)] bg-[var(--c-bg2)] px-3.5 py-2.5 font-mono text-[11px] text-[var(--c-dim)] space-y-1">
-            {activity.map((a, i) => (
-              <p key={i} className="logline">
-                <span className="text-[var(--c-mint)]">▸</span> {a}
-              </p>
-            ))}
-          </div>
-        </div>
-
-        {inviteOpen && (
-          <div className="fixed inset-0 z-50 grid place-items-center p-4 bg-[color-mix(in_srgb,var(--c-bg)_72%,transparent)] backdrop-blur-[3px]" onClick={() => setInviteOpen(false)}>
-            <div className="card w-full max-w-md p-6 shadow-[var(--c-shadow)] fadeup" onClick={(e) => e.stopPropagation()}>
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-display font-700 text-lg">{t("room.invite")}</h3>
-                <button className="text-[var(--c-faint)] hover:text-[var(--c-text)]" onClick={() => setInviteOpen(false)}>
-                  <IconClose className="w-5 h-5" />
+          {/* ── Бічна колонка ── */}
+          <aside className="space-y-4 min-w-0">
+            <div className="card p-4">
+              <p className="panel-title mb-3">{t("room.invite")}</p>
+              <div className="grid grid-cols-2 gap-2 mb-3">
+                <button className="rounded-lg border border-[var(--c-line)] bg-[var(--c-bg2)] px-3 py-2.5 text-left hover:border-[var(--c-line2)] transition-colors group" onClick={() => void copyText(room.number)}>
+                  <p className="text-[10px] text-[var(--c-faint)]">{t("room.number")}</p>
+                  <p className="font-mono font-700 text-[15px] text-[var(--c-text)] group-hover:text-[var(--c-mint)] transition-colors">{room.number}</p>
+                </button>
+                <button className="rounded-lg border border-[var(--c-line)] bg-[var(--c-bg2)] px-3 py-2.5 text-left hover:border-[var(--c-line2)] transition-colors group" onClick={() => void copyText(room.code)}>
+                  <p className="text-[10px] text-[var(--c-faint)]">{t("room.code")}</p>
+                  <p className="font-mono font-700 text-[15px] text-[var(--c-amber)] group-hover:text-[var(--c-mint)] transition-colors">{room.code}</p>
                 </button>
               </div>
-              <p className="text-[13px] text-[var(--c-dim)] mb-4">{t("room.inviteSub")}</p>
-              <div className="flex items-center gap-2 rounded-xl border border-[var(--c-line2)] bg-[var(--c-bg2)] px-3.5 py-3">
-                <IconLink className="w-4 h-4 text-[var(--c-amber)] flex-none" />
-                <span className="font-mono text-[12px] truncate flex-1">{location.origin + location.pathname}?room={room.id}</span>
-                <button className="btn btn-icon !p-2" onClick={copyLink} title={t("room.copyLink")}>
+              <p className="text-[10px] text-[var(--c-faint)] mb-1.5">{t("room.link")}</p>
+              <div className="flex gap-1.5">
+                <input className="input !py-2 !text-[11.5px] font-mono" readOnly value={link} onFocus={(e) => e.target.select()} />
+                <button className="btn btn-icon !rounded-lg" onClick={() => void copyText(link)} title={t("room.copyLink")}>
                   <IconCopy className="w-4 h-4" />
                 </button>
+                <button className="btn btn-icon !rounded-lg" onClick={() => void shareLink()} title={t("room.share")}>
+                  <IconLink className="w-4 h-4" />
+                </button>
               </div>
-              <p className="panel-title mt-5 mb-2">{t("room.inviteById")}</p>
-              <div className="flex gap-2">
+              <p className="mt-3 text-[11px] text-[var(--c-dim)] leading-relaxed">{t("room.sub")}</p>
+            </div>
+
+            <div className="card overflow-hidden flex flex-col h-[380px]">
+              <div className="px-4 py-2.5 border-b border-[var(--c-line)] flex items-center justify-between">
+                <p className="panel-title">{t("chat.title")}</p>
+                <span className="font-mono text-[10px] text-[var(--c-mint)]">{roster.length} p2p</span>
+              </div>
+              <div ref={listRef} className="flex-1 overflow-y-auto px-3 py-2.5 space-y-2">
+                {msgs.map((m) => (
+                  <div key={m.id} className={`logline text-[13px] leading-snug ${m.you ? "text-right" : ""}`}>
+                    {m.kind === "sys" ? (
+                      <p className="font-mono text-[11px] text-[var(--c-faint)]">— {m.text} —</p>
+                    ) : (
+                      <span
+                        className={`inline-block max-w-full text-left px-2.5 py-1.5 rounded-lg break-words ${
+                          m.you ? "bg-[color-mix(in_srgb,var(--c-amber)_18%,transparent)]" : "bg-[var(--c-raise)]"
+                        }`}
+                      >
+                        <span className="block font-mono text-[9.5px] text-[var(--c-faint)] mb-0.5">
+                          {m.you ? t("room.you") : m.name} · {m.time}
+                        </span>
+                        {m.text}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="p-2 border-t border-[var(--c-line)] flex gap-1.5">
                 <input
-                  className="input font-mono"
-                  placeholder="7F3K9Q"
-                  value={friendId}
-                  onChange={(e) => setFriendId(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && inviteFriend()}
-                  disabled={inviting}
+                  className="input !py-2 !text-[13px]"
+                  placeholder={t("chat.ph")}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && send()}
                 />
-                <button className="btn btn-mint" onClick={inviteFriend} disabled={inviting}>
-                  {inviting ? "…" : t("room.sendInvite")}
+                <button className="btn btn-amber btn-icon !rounded-lg" onClick={send} aria-label={t("chat.ph")}>
+                  <IconSend className="w-4 h-4" />
                 </button>
               </div>
             </div>
-          </div>
-        )}
+          </aside>
+        </div>
       </div>
     );
   }
 
-  /* ── Екран списку / створення ── */
+  /* ── Домашній екран кімнат ── */
   return (
-    <div className="fadeup">
-      <div className="max-w-2xl mb-6">
-        <h1 className="font-display font-900 text-2xl sm:text-4xl tracking-tight">{t("room.title")}</h1>
-        <p className="mt-2.5 text-[15px] text-[var(--c-dim)] leading-relaxed">{t("room.sub")}</p>
+    <div>
+      <div className="max-w-3xl mb-8">
+        <p className="panel-title mb-2">viche · rooms</p>
+        <h1 className="font-display font-900 text-2xl sm:text-4xl tracking-tight">{titleWord}</h1>
+        <p className="mt-3 text-[15px] text-[var(--c-dim)] leading-relaxed">{t("room.sub")}</p>
       </div>
 
       <div className="grid md:grid-cols-2 gap-4 items-start">
-        <div className="card p-5 sm:p-6">
-          <div className="flex items-center gap-3 mb-5">
-            <span className="grid place-items-center w-10 h-10 rounded-xl bg-[color-mix(in_srgb,var(--c-amber)_15%,transparent)] text-[var(--c-amber)]">
+        <div className="card p-5">
+          <div className="flex items-center gap-2.5 mb-4">
+            <span className="grid place-items-center w-9 h-9 rounded-lg bg-[color-mix(in_srgb,var(--c-amber)_14%,transparent)] text-[var(--c-amber)]">
               <IconRooms className="w-5 h-5" />
             </span>
             <h2 className="font-display font-700 text-lg">{t("room.create")}</h2>
           </div>
-          <label className="panel-title block mb-2">{t("room.name")}</label>
-          <input className="input mb-4" placeholder={t("room.namePh")} value={name} onChange={(e) => setName(e.target.value)} />
-          <label className="panel-title block mb-2">{t("room.seats")}</label>
+          <label className="block text-[11px] text-[var(--c-faint)] mb-1.5">{t("room.name")}</label>
+          <input className="input mb-4" placeholder={t("room.namePh")} value={name} onChange={(e) => setName(e.target.value.slice(0, 24))} />
+          <p className="text-[11px] text-[var(--c-faint)] mb-1.5">{t("room.seats")}</p>
           <div className="flex gap-2 mb-5">
-            {[2, 3, 4, 6].map((s) => (
+            {[2, 3, 4, 6, 8].map((s) => (
               <button key={s} className={`chip !px-4 font-mono ${seats === s ? "chip-on" : ""}`} onClick={() => setSeats(s)}>
                 {s}
               </button>
             ))}
           </div>
-          <button className="btn btn-amber w-full !py-3" onClick={createRoom}>
-            <IconPlus className="w-5 h-5" /> {t("room.createBtn")}
+          <button className="btn btn-amber w-full !py-3" onClick={createRoom} disabled={busy}>
+            <IconPlus className="w-4 h-4" />
+            {t("room.createBtn")}
           </button>
-          <p className="mt-3 font-mono text-[11px] text-[var(--c-faint)]">id: VCH-XXXXXX · redis: room:{`{id}`} → peers[]</p>
+          <p className="mt-3 font-mono text-[10.5px] text-[var(--c-faint)] flex items-center gap-1.5">
+            <IconCheck className="w-3.5 h-3.5 text-[var(--c-mint)]" />
+            {t("room.sHost")} · mesh p2p
+          </p>
         </div>
 
         <div className="space-y-4">
-          <div className="card p-5 sm:p-6">
-            <h2 className="font-display font-700 text-lg mb-4">{t("room.join")}</h2>
-            <div className="flex gap-2">
-              <input
-                className={`input font-mono uppercase ${joinErr ? "shake !border-[var(--c-red)]" : ""}`}
-                placeholder={t("room.idPh")}
-                value={joinId}
-                onChange={(e) => setJoinId(e.target.value.toUpperCase())}
-                onKeyDown={(e) => e.key === "Enter" && joinRoom(joinId)}
-              />
-              <button className="btn btn-mint" onClick={() => joinRoom(joinId)}>
-                {t("room.joinBtn")}
-              </button>
+          <div className="card p-5">
+            <div className="flex items-center gap-2.5 mb-4">
+              <span className="grid place-items-center w-9 h-9 rounded-lg bg-[color-mix(in_srgb,var(--c-mint)_14%,transparent)] text-[var(--c-mint)]">
+                <IconUserPlus className="w-5 h-5" />
+              </span>
+              <h2 className="font-display font-700 text-lg">{t("room.join")}</h2>
             </div>
-            {joinErr && <p className="mt-2 text-[12px] font-600 text-[var(--c-red)] fadeup">{t("room.invalid")}</p>}
+            <div className="grid grid-cols-[1fr_92px] gap-2 mb-4">
+              <div>
+                <label className="block text-[11px] text-[var(--c-faint)] mb-1.5">{t("room.number")}</label>
+                <input
+                  className="input font-mono"
+                  inputMode="numeric"
+                  placeholder={t("room.numberPh")}
+                  value={joinNum}
+                  onChange={(e) => setJoinNum(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] text-[var(--c-faint)] mb-1.5">{t("room.code")}</label>
+                <input
+                  className="input font-mono uppercase"
+                  placeholder={t("room.codePh")}
+                  value={joinCode}
+                  onChange={(e) => setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4))}
+                  onKeyDown={(e) => e.key === "Enter" && joinRoom()}
+                />
+              </div>
+            </div>
+            <button className="btn w-full !py-3" onClick={joinRoom} disabled={busy}>
+              {t("room.joinBtn")}
+            </button>
           </div>
 
-          <div className="card p-5 sm:p-6">
+          <div className="card p-5">
             <p className="panel-title mb-3">{t("room.recent")}</p>
-            {recent.length === 0 ? (
-              <p className="text-[13px] text-[var(--c-faint)] italic">{t("room.noRecent")}</p>
-            ) : (
-              <ul className="space-y-2">
-                {recent.map((r) => (
-                  <li key={r.id} className="flex items-center gap-3 rounded-lg border border-[var(--c-line)] bg-[var(--c-bg2)] px-3.5 py-2.5">
-                    <span className="led led-mint" />
-                    <span className="font-600 text-[14px] truncate flex-1">{r.name}</span>
-                    <span className="tick-id text-[11px]">{r.id}</span>
-                    <button className="btn !py-1.5 !px-3 !text-[12px]" onClick={() => joinRoom(r.id)}>
-                      {t("room.enter")}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
+            {recents.length === 0 && <p className="text-[13px] text-[var(--c-faint)]">{t("room.noRecent")}</p>}
+            <div className="space-y-2">
+              {recents.map((r) => (
+                <button
+                  key={r.number + r.code}
+                  className="w-full flex items-center gap-3 rounded-lg border border-[var(--c-line)] bg-[var(--c-bg2)] px-3.5 py-2.5 hover:border-[var(--c-line2)] hover:translate-x-1 transition-all text-left"
+                  onClick={() => {
+                    setJoinNum(r.number);
+                    setJoinCode(r.code);
+                    void openRoom({ number: r.number, code: r.code }, false);
+                  }}
+                >
+                  <span className="font-mono font-700 text-[14px]">№{r.number}</span>
+                  <span className="font-mono text-[13px] text-[var(--c-amber)]">{r.code}</span>
+                  <span className="ml-auto font-mono text-[10px] text-[var(--c-faint)]">
+                    {new Date(r.ts).toLocaleDateString("uk-UA")}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </div>
     </div>
   );
-}
-
-function GuestVideo({ stream }: { stream: MediaStream }) {
-  const ref = useRef<HTMLVideoElement>(null);
-  useEffect(() => {
-    const v = ref.current;
-    if (v) {
-      v.srcObject = stream;
-      v.play().catch(() => {});
-    }
-  }, [stream]);
-  return <video ref={ref} autoPlay playsInline muted className="w-full h-full object-cover" />;
 }

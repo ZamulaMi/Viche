@@ -82,23 +82,18 @@ function Shell() {
       return "dark";
     }
   });
-  const initialJoin = useMemo(() => new URLSearchParams(location.search).get("room"), []);
+  /* Вхід у кімнату за лінком: ?room=123456&code=ABCD */
+  const initialJoin = useMemo(() => {
+    const q = new URLSearchParams(location.search);
+    const n = (q.get("room") || "").replace(/\D/g, "");
+    const c = (q.get("code") || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    return n.length === 6 && c.length === 4 ? { number: n, code: c } : null;
+  }, []);
   const [view, setView] = useState<View>(initialJoin ? "rooms" : "roulette");
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const localPromise = useRef<Promise<LocalMedia> | null>(null);
   const [localMedia, setLocalMedia] = useState<LocalMedia | null>(null);
-
-  /* Реальні дані клієнта: час, ідентифікатор сесії */
-  const sessionId = useMemo(() => "SES-" + shortId(4), []);
-  const [clock, setClock] = useState(() => new Date().toLocaleTimeString("uk-UA", { hour12: false }));
-  useEffect(() => {
-    const id = window.setInterval(
-      () => setClock(new Date().toLocaleTimeString("uk-UA", { hour12: false })),
-      1000
-    );
-    return () => window.clearInterval(id);
-  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -134,6 +129,7 @@ function Shell() {
   }, []);
 
   const brand = useScramble("VICHE", 120);
+  const sessionId = useMemo(() => "SES-" + shortId(4), []);
 
   const NAV: Array<{ v: View; k: string; icon: React.ReactNode; key: string }> = [
     { v: "roulette", k: "1", icon: <IconShuffle className="w-5 h-5" />, key: "nav.roulette" },
@@ -146,14 +142,6 @@ function Shell() {
       : t("stat.mediaAvatar")
     : t("stat.mediaPending");
 
-  /* Тільки реальні дані клієнта */
-  const tickerItems = [
-    [clock, t("tick.time"), "mint"],
-    [sessionId, t("tick.sess"), "amber"],
-    [mediaWord, t("stat.media"), "mint"],
-    [lang.toUpperCase(), t("tick.lang"), "dim"],
-  ] as const;
-
   return (
     <div className="min-h-screen relative">
       <Ambient />
@@ -165,13 +153,22 @@ function Shell() {
         {/* ── Шапка ── */}
         <header className="sticky top-0 z-40 border-b border-[var(--c-line)] bg-[color-mix(in_srgb,var(--c-bg)_85%,transparent)] backdrop-blur-md">
           <div className="max-w-[1400px] mx-auto w-full px-4 sm:px-6 h-[60px] flex items-center gap-4">
-            <button className="flex items-center gap-3 group" onClick={() => setView("roulette")}>
+            <a
+              href="/"
+              className="flex items-center gap-3 group"
+              onClick={(e) => {
+                e.preventDefault();
+                setView("roulette");
+                window.scrollTo({ top: 0 });
+              }}
+              aria-label="Viche — home"
+            >
               <LogoMark className="w-9 h-9 transition-transform group-hover:rotate-6" />
               <span className="text-left leading-none">
-                <span className="font-display font-900 text-[19px] tracking-[0.08em] block">{brand}</span>
+                <span className="font-display font-900 text-[19px] tracking-[0.08em] block group-hover:text-[var(--c-amber)] transition-colors">{brand}</span>
                 <span className="font-mono text-[10px] text-[var(--c-faint)] tracking-wide">{t("brand.tag")}</span>
               </span>
-            </button>
+            </a>
 
             <div className="ml-auto flex items-center gap-2">
               <div className="flex rounded-lg border border-[var(--c-line2)] overflow-hidden">
@@ -195,23 +192,6 @@ function Shell() {
               >
                 {theme === "dark" ? <IconSun className="w-5 h-5" /> : <IconMoon className="w-5 h-5" />}
               </button>
-            </div>
-          </div>
-
-          {/* тікер */}
-          <div className="marquee border-t border-[var(--c-line)] overflow-hidden py-1.5">
-            <div className="marquee-track flex w-max items-center">
-              {[0, 1].map((dup) => (
-                <div key={dup} className="flex items-center" aria-hidden={dup === 1}>
-                  {tickerItems.map(([v, l, c], i) => (
-                    <span key={i} className="flex items-center gap-2 px-6 font-mono text-[11px] whitespace-nowrap">
-                      <span className={`led ${c === "mint" ? "led-mint" : c === "amber" ? "led-amber" : ""}`} style={c === "dim" ? { width: 5, height: 5 } : undefined} />
-                      <span className={c === "mint" ? "text-[var(--c-mint)]" : c === "amber" ? "text-[var(--c-amber)]" : "text-[var(--c-text)]"}>{v}</span>
-                      {l && <span className="text-[var(--c-faint)]">{l}</span>}
-                    </span>
-                  ))}
-                </div>
-              ))}
             </div>
           </div>
         </header>
@@ -240,7 +220,7 @@ function Shell() {
                   <span className="led led-mint" /> {sessionId}
                 </p>
                 <p className="font-mono text-[10px] text-[var(--c-faint)] mt-1.5 leading-relaxed">
-                  {mediaWord}<br />{clock} · {lang.toUpperCase()}
+                  {mediaWord}<br />{lang.toUpperCase()} · viche v1.0
                 </p>
               </div>
             </div>

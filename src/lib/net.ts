@@ -50,6 +50,30 @@ const iceConfig = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
 };
 
+/* Повторне встановлення медіа після зміни мережі (Wi-Fi ↔ мобільні дані):
+   ICE restart на живих RTCPeerConnection — сигнали йдуть тим самим
+   (автовідновлюваним PeerJS) WebSocket-каналом.                        */
+export function restartIceOn(call: MediaConnection | null | undefined) {
+  try {
+    const pc = call?.peerConnection;
+    if (pc && pc.signalingState !== "closed") pc.restartIce();
+  } catch {
+    /* noop */
+  }
+}
+
+export function attachNetRecovery(getCalls: () => Array<MediaConnection | null | undefined>) {
+  const bump = () => getCalls().forEach(restartIceOn);
+  window.addEventListener("online", bump);
+  const nav = navigator as Navigator & { connection?: { addEventListener?: (t: string, f: () => void) => void; removeEventListener?: (t: string, f: () => void) => void } };
+  const connChange = () => window.setTimeout(bump, 400);
+  nav.connection?.addEventListener?.("change", connChange);
+  return () => {
+    window.removeEventListener("online", bump);
+    nav.connection?.removeEventListener?.("change", connChange);
+  };
+}
+
 export class MatchClient {
   private peer: Peer | null = null;
   private mode: NetMode = "connecting";
@@ -81,7 +105,11 @@ export class MatchClient {
   private demoCloser: (() => void) | null = null;
   private demoTimers: number[] = [];
 
+  private detachNet: (() => void) | null = null;
+
   constructor(private stream: MediaStream, private hooks: MatchHooks) {
+    // Wi-Fi ↔ мобільні дані: ICE restart на живих дзвінках
+    this.detachNet = attachNetRecovery(() => [this.call]);
     this.promoteOrJoin();
   }
 
@@ -253,9 +281,13 @@ export class MatchClient {
       // лобі сам чекав → дзвонимо гостю
       this.startCall(conn.peer, true);
       conn.send({ type: "pair", with: this.peer!.id, initiator: false } satisfies Msg);
-    } else {
+    } else if (waiting.conn.open) {
       waiting.conn.send({ type: "pair", with: conn.peer, initiator: false } satisfies Msg);
       conn.send({ type: "pair", with: waiting.id, initiator: true } satisfies Msg);
+    } else {
+      // попередній гість зник до пари → новий стає в чергу
+      this.waiter = guest;
+      conn.send({ type: "wait" } satisfies Msg);
     }
   }
 
@@ -302,6 +334,8 @@ export class MatchClient {
     if (msg.type === "wait") {
       this.hooks.onQueued();
     } else if (msg.type === "pair") {
+      // після «Завершити» лобі може надіслати пару із запізненням — ігноруємо
+      if (!this.searching || this.paired) return;
       this.expectFrom = msg.with;
       if (msg.initiator) this.startCall(msg.with, true);
       // не-ініціатор просто чекає вхідний дзвінок (expectFrom)
@@ -331,6 +365,24 @@ export class MatchClient {
     this.expectFrom = null;
     // партнер відомий одначе — це закриває гонку для вхідного DataConnection
     this.partnerId = call.peer;
+    // watchdog: зміна мережі рве ICE — пробуємо restartIce, вдруге — peer left
+    let restarted = false;
+    try {
+      call.peerConnection?.addEventListener?.("connectionstatechange", () => {
+        const st = call.peerConnection?.connectionState;
+        if (st !== "failed" || this.call !== call) return;
+        if (!restarted) {
+          restarted = true;
+          restartIceOn(call);
+        } else if (this.paired) {
+          this.call = null;
+          this.paired = false;
+          this.hooks.onPeerLeft();
+        }
+      });
+    } catch {
+      /* noop */
+    }
     call.on("stream", (s) => {
       if (this.call !== call) return;
       this.paired = true;
@@ -451,12 +503,23 @@ export class MatchClient {
       }
       this.dataConn = null;
     }
+    // вихід із черги: інакше лобі може з'єднати нас після «Завершити»
+    if (this.lobbyConn && !this.isLobby) {
+      try {
+        this.lobbyConn.close();
+      } catch {
+        /* noop */
+      }
+      this.lobbyConn = null;
+    }
     this.partnerId = null;
     this.expectFrom = null;
   }
 
   dispose() {
     this.disposed = true;
+    this.detachNet?.();
+    this.detachNet = null;
     this.stop();
     window.clearTimeout(this.lobbyConnTimer);
     this.demoTimers.forEach((x) => window.clearTimeout(x));

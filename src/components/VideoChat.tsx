@@ -23,6 +23,8 @@ type Props = {
   peer: Peer;
   remoteStream: MediaStream | null;
   setRemoteSpeaking: (b: boolean) => void;
+  /** орієнтація відео партнера: 4:3 горизонталь / 3:4 вертикаль */
+  onOrient?: (o: "land" | "port") => void;
   /** реальний текстовий чат (лише для мережевої пари) */
   chat?: { send: (text: string) => void; subscribe: (fn: (text: string) => void) => () => void };
   localMedia: LocalMedia | null;
@@ -37,6 +39,7 @@ export default function VideoChat({
   peer,
   remoteStream,
   setRemoteSpeaking,
+  onOrient,
   chat,
   localMedia,
   onLeave,
@@ -234,8 +237,19 @@ export default function VideoChat({
 
   return (
     <div ref={boxRef} className="absolute inset-0 overflow-hidden bg-black">
-      {/* remote */}
-      <video ref={remoteRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover" />
+      {/* remote: без обрізки — contain; орієнтація визначає формат сцени */}
+      <video
+        ref={remoteRef}
+        autoPlay
+        playsInline
+        onLoadedMetadata={(e) => {
+          const v = e.currentTarget;
+          if (v.videoWidth > 0 && v.videoHeight > 0) {
+            onOrient?.(v.videoWidth < v.videoHeight ? "port" : "land");
+          }
+        }}
+        className="absolute inset-0 w-full h-full object-contain bg-black"
+      />
       <div className="absolute inset-0 scanlines pointer-events-none" />
       <div className="absolute inset-0 pointer-events-none vignette" />
       {burst && <div className="absolute inset-0 staticburst opacity-60 pointer-events-none z-10" />}
@@ -282,7 +296,7 @@ export default function VideoChat({
       {/* локальне відео (PiP) */}
       <div className="absolute right-3 bottom-[92px] sm:bottom-24 w-28 sm:w-44 aspect-[4/3] rounded-lg overflow-hidden border border-[var(--c-line2)] shadow-[var(--c-shadow)] z-20 bg-[var(--c-bg2)]">
         {localMedia?.isReal ? (
-          <video ref={localRef} autoPlay playsInline muted className="w-full h-full object-cover -scale-x-100" />
+          <video ref={localRef} autoPlay playsInline muted className="w-full h-full object-contain -scale-x-100 bg-[var(--c-bg2)]" />
         ) : (
           <div className="w-full h-full grid place-items-center">
             <span className="font-display text-2xl text-[var(--c-amber)]">TI</span>

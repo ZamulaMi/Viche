@@ -38,8 +38,18 @@ const pick = <T,>(arr: readonly T[]): T => arr[Math.floor(Math.random() * arr.le
 const HEX = "0123456789ABCDEF";
 export const shortId = (n = 4) =>
   Array.from({ length: n }, () => HEX[Math.floor(Math.random() * 16)]).join("");
-export const roomId = () =>
-  "VCH-" + Array.from({ length: 6 }, () => HEX[Math.floor(Math.random() * 16)]).join("");
+
+/* Кімната = номер (6 цифр) + код (4 знаки). Обоє значень — у посиланні,
+   тому за лінком вхід без ручного введення.                        */
+export type RoomId = { number: string; code: string };
+const CODE_ABC = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // без 0/O/1/I/L
+export const makeRoomId = (): RoomId => ({
+  number: String(ri(100000, 999999)),
+  code: Array.from({ length: 4 }, () => CODE_ABC[Math.floor(Math.random() * CODE_ABC.length)]).join(""),
+});
+export const roomIdStr = (r: RoomId) => `${r.number}-${r.code}`;
+export const roomLink = (r: RoomId) =>
+  `${location.origin}${location.pathname}?room=${r.number}&code=${r.code}`;
 
 export function makePeer(partial?: Partial<Peer>): Peer {
   const gender = partial?.gender ?? (Math.random() > 0.5 ? "m" : "f");

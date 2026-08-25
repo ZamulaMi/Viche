@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LANGS, TAGS, shortId, type Filters, type Peer } from "../lib/sim";
 import type { LocalMedia } from "../lib/rtc";
-import { FALLBACK_WAIT_MS, MatchClient, type MatchResult, type NetMode } from "../lib/net";
+import { FALLBACK_WAIT_MS, MatchClient, type MatchResult } from "../lib/net";
 import { useI18n, type DictKey } from "../i18n";
 import { useScramble } from "../lib/hooks";
 import CaptchaModal, { captchaToken } from "./Captcha";
@@ -27,10 +27,8 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
   const [advanced, setAdvanced] = useState(false);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [elapsed, setElapsed] = useState(0);
-  const [mode, setMode] = useState<NetMode>("connecting");
-  const [queued, setQueued] = useState(false);
-  const [demoNote, setDemoNote] = useState(false);
   const [chat, setChat] = useState<MatchResult["chat"] | null>(null);
+  const [orient, setOrient] = useState<"land" | "port">("land");
 
   const clientRef = useRef<MatchClient | null>(null);
   const closeRef = useRef<(() => void) | null>(null);
@@ -93,13 +91,11 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
       if (clientRef.current) return clientRef.current;
       const client = new MatchClient(lm.stream, {
         onMode: (m) => {
-          setMode(m);
           if (m === "demo" && hasSearched.current) {
             toastRef.current(tRef.current("toast.demoFallback"), "warn");
           }
         },
         onQueued: () => {
-          setQueued(true);
           clearWait();
           waitTimer.current = window.setTimeout(() => {
             clientRef.current?.demoPairOnce();
@@ -111,8 +107,7 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
             return;
           }
           clearWait();
-          setQueued(false);
-          setDemoNote(r.demo);
+          setOrient("land");
           setPeer(r.peer);
           setChat(r.chat ?? null);
           speakRef.current = r.setSpeaking ?? null;
@@ -122,7 +117,6 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
         },
         onPeerLeft: () => {
           clearWait();
-          setQueued(false);
           closeRemote();
           setPeer(null);
           setChat(null);
@@ -150,9 +144,8 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
       clearWait();
       closeRemote();
       setPeer(null);
-      setDemoNote(false);
       setElapsed(0);
-      setQueued(false);
+      setOrient("land");
       setPhase("searching");
       hasSearched.current = true;
       const lm = lmRef.current;
@@ -185,9 +178,8 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
     clientRef.current?.stop();
     closeRemote();
     setPeer(null);
-    setDemoNote(false);
-    setQueued(false);
     setElapsed(0);
+    setOrient("land");
     setPhase("idle");
   };
 
@@ -199,36 +191,24 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
 
   const ledCls = phase === "live" ? "led-mint" : phase === "searching" ? "led-amber" : "";
 
-  const mediaLabel = localMedia
-    ? localMedia.hasCam
-      ? t("stat.mediaCam")
-      : t("stat.mediaAvatar")
-    : t("stat.mediaPending");
-
-  const modeLabel =
-    mode === "online" ? t("stat.modeOnline") : mode === "demo" ? t("stat.modeDemo") : t("stat.modeConnecting");
-
-  const caption =
-    mode === "demo"
-      ? t("search.captionDemo")
-      : queued
-        ? t("search.queued")
-        : t("search.captionOnline");
-
-  const genderLabel =
-    filters.gender === "any" ? t("flt.any") : filters.gender === "m" ? t("flt.male") : t("flt.female");
-
   return (
-    <div className="grid lg:grid-cols-[minmax(0,1fr)_330px] gap-4 items-start">
+    <div>
       <div className="min-w-0">
-        {/* ── Сцена ── */}
+        {/* ── Сцена: 4:3 для горизонтального відео, 3:4 для вертикального ── */}
         <div className="card overflow-hidden">
-          <div className="relative aspect-video bg-[var(--c-bg2)] overflow-hidden">
+          <div
+            className={`relative bg-[var(--c-bg2)] overflow-hidden ${
+              orient === "port"
+                ? "aspect-[3/4] max-w-[500px] sm:max-w-[560px] mx-auto"
+                : "aspect-[4/3] max-w-[900px] mx-auto"
+            }`}
+          >
             {phase === "live" && peer ? (
               <VideoChat
                 peer={peer}
                 remoteStream={remoteStream}
                 setRemoteSpeaking={(b) => speakRef.current?.(b)}
+                onOrient={setOrient}
                 chat={chat ?? undefined}
                 localMedia={localMedia}
                 onLeave={(k) => (k === "next" ? next() : stop())}
@@ -283,7 +263,7 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
                       <h2 className="font-display font-900 text-2xl sm:text-3xl text-[var(--c-mint)]">
                         {t("state.searching")}
                       </h2>
-                      <p className="mt-2 font-mono text-[12px] text-[var(--c-dim)]">{caption}</p>
+                      <p className="mt-2 font-mono text-[12px] text-[var(--c-dim)]">{t("search.captionOnline")}</p>
                       <p className="mt-1 font-mono text-[13px] text-[var(--c-amber)] caret">
                         {t("stat.elapsed")} · {fmtElapsed(elapsed)}
                       </p>
@@ -382,69 +362,6 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
           </div>
         </div>
       </div>
-
-      {/* ── Бічна колонка: лише реальні дані сесії ── */}
-      <aside className="space-y-4 min-w-0">
-        <div className="card p-4">
-          <p className="panel-title mb-3">{t("nav.roulette")} · status</p>
-          <div className="flex items-center gap-3">
-            <span
-              className="grid place-items-center w-12 h-12 rounded-xl font-display font-900 text-lg"
-              style={{
-                background: peer && phase === "live" ? `hsl(${peer.hue} 45% 22%)` : "var(--c-raise)",
-                color: peer && phase === "live" ? `hsl(${peer.hue} 85% 75%)` : "var(--c-amber)",
-                border: "1px solid var(--c-line2)",
-              }}
-            >
-              {peer && phase === "live" ? peer.name.split("_")[1]?.slice(0, 2) : "V"}
-            </span>
-            <div className="min-w-0">
-              <p className="font-700 text-[15px] truncate">{peer && phase === "live" ? peer.name : sessionId}</p>
-              <p className="font-mono text-[11px] text-[var(--c-dim)]">
-                {peer && phase === "live"
-                  ? demoNote
-                    ? t("stat.pairDemo")
-                    : peer.real
-                      ? `#${peer.id} · p2p`
-                      : `${peer.langs.map((l) => l.toUpperCase()).join("/")} · ${peer.tags.map((x) => "#" + x).join(" ")}`
-                  : mediaLabel}
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-4 space-y-px rounded-lg border border-[var(--c-line)] bg-[var(--c-bg2)] overflow-hidden">
-            {([
-              [t("stat.mode"), modeLabel, mode === "online" ? "text-[var(--c-mint)]" : mode === "demo" ? "text-[var(--c-amber)]" : "text-[var(--c-faint)]"],
-              [t("stat.elapsed"), busy || phase === "live" ? fmtElapsed(elapsed) : "—", busy ? "text-[var(--c-amber)]" : "text-[var(--c-mint)]"],
-              [t("stat.session"), sessionId, "text-[var(--c-text)]"],
-              [t("stat.media"), mediaLabel, "text-[var(--c-text)]"],
-              [t("stat.channel"), phase === "live" ? t("stat.channelLive") : t("stat.channelIdle"), phase === "live" ? "text-[var(--c-mint)]" : "text-[var(--c-faint)]"],
-            ] as const).map(([label, value, cls]) => (
-              <div key={label} className="flex items-center justify-between gap-3 px-3.5 py-2.5 odd:bg-[color-mix(in_srgb,var(--c-raise)_55%,transparent)]">
-                <span className="text-[11px] text-[var(--c-faint)]">{label}</span>
-                <span className={`font-mono text-[12px] ${cls}`}>{value}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Активні фільтри — реальні значення з пульта */}
-        <div className="card p-4">
-          <p className="panel-title mb-3">{t("stat.filters")}</p>
-          <div className="flex flex-wrap gap-1.5">
-            <span className="chip !cursor-default !text-[12px]">{genderLabel}</span>
-            <span className="chip !cursor-default !text-[12px] font-mono">{filters.lang.toUpperCase()}</span>
-            {filters.tags.length === 0 && (
-              <span className="chip !cursor-default !text-[12px] opacity-60">{t("stat.noTags")}</span>
-            )}
-            {filters.tags.map((tg) => (
-              <span key={tg} className="chip chip-on !cursor-default !text-[12px]">
-                #{t(`tag.${tg}` as DictKey)}
-              </span>
-            ))}
-          </div>
-        </div>
-      </aside>
 
       {phase === "captcha" && (
         <CaptchaModal
