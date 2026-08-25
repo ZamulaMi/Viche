@@ -156,6 +156,9 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   useEffect(() => {
     huntersRef.current = hunters;
   }, [hunters]);
+  /* aux-потоки: відео «випадкових гостей», ретрансльоване хостом —
+     їх бачать усі учасники кімнати (не лише адміністратор) */
+  const [auxStreams, setAuxStreams] = useState<Record<string, { name: string; stream: MediaStream }>>({});
   const [searching, setSearching] = useState(false);
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState("");
@@ -214,6 +217,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
     setRoster([]);
     prevRoster.current = [];
     setStreams({});
+    setAuxStreams({});
     setMsgs([]);
     setSearching(false);
     // після виходу з кімнати камера/мікрофон вимикаються повністю
@@ -233,6 +237,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
         prevRoster.current = [];
         setRoster([]);
         setStreams({});
+        setAuxStreams({});
         saveRecent(r);
         setRecents(loadRecent());
         const net = new RoomNet(r, name.trim() || "Гість_" + shortId(4), lm.stream, seats, {
@@ -279,6 +284,15 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
             leaveRoom();
           },
           onIceInfo: (info) => aliveRef.current && setIceInfo(info),
+          onAuxStream: (auxId, auxName, stream) =>
+            aliveRef.current && setAuxStreams((a) => ({ ...a, [auxId]: { name: auxName, stream } })),
+          onAuxGone: (auxId) =>
+            aliveRef.current &&
+            setAuxStreams((a) => {
+              const cp = { ...a };
+              delete cp[auxId];
+              return cp;
+            }),
         });
         netRef.current = net;
       } finally {
@@ -383,11 +397,15 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
           }
           return [...hs, { id: peerId, name, stream, net: hunter }];
         });
+        // головне: хост ретранслює відео випадкового гостя ВСІМ учасникам
+        netRef.current?.shareAuxStream(peerId, name, stream);
         push("sys", `${name} ${t("room.guestJoined")} · ${t("room.randomBadge")}`);
         setSearching(false);
       },
       onPeerLeft: () => {
         if (!aliveRef.current) return;
+        const gone = huntersRef.current.find((h) => h.net === hunter);
+        if (gone) netRef.current?.stopShareAuxStream(gone.id);
         setHunters((hs) => hs.filter((h) => h.net !== hunter));
         hunter.dispose();
         push("sys", t("room.guestLeft"));
@@ -402,6 +420,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
     const h = huntersRef.current.find((x) => x.id === id);
     if (!h) return;
     h.net.dispose();
+    netRef.current?.stopShareAuxStream(id); // прибираємо з екранів усіх учасників
     push("sys", `${h.name} ${t("room.guestLeft")}`);
     setHunters((hs) => hs.filter((x) => x.id !== id));
   };
@@ -511,6 +530,18 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
                     </button>
                   )}
                 </div>
+              ))}
+              {/* випадкові гості, ретрансльовані хостом — їх бачать усі
+                  учасники (не лише адміністратор); у хоста цей список
+                  порожній, бо він бачить їх через `hunters` */}
+              {Object.entries(auxStreams).map(([auxId, a]) => (
+                <Tile
+                  key={"aux-" + auxId}
+                  stream={a.stream}
+                  name={a.name}
+                  badge={t("room.randomBadge")}
+                  badgeTone="mint"
+                />
               ))}
               {/* вільні місця */}
               {Array.from({ length: Math.max(0, seats - filled) }).map((_, i) => (

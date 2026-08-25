@@ -61,6 +61,13 @@ export class RoomNet {
   private joinTimer = 0;
   private detachNet: (() => void) | null = null;
 
+  /* ── aux-потоки: хост ретранслює відео «випадкових гостей» (з пулу
+     рулетки) всім учасникам кімнати. Ключ — auxId. Окремо зберігаємо
+     самі потоки, щоб учасник, який зайшов пізніше, теж їх отримав. ── */
+  private auxCalls = new Map<string, MediaConnection[]>(); // auxId → виклики до учасників
+  private auxStreams = new Map<string, { name: string; stream: MediaStream }>();
+  private emptyStream = new MediaStream();
+
   constructor(
     room: RoomId,
     private name: string,
@@ -98,7 +105,7 @@ export class RoomNet {
           if (m?.type === "join") this.onJoin(conn, m);
         });
       });
-      p.on("call", (call) => this.acceptCall(call));
+      p.on("call", (call) => this.routeCall(call));
       this.roster = [{ id: this.hostId, name: this.name }];
       this.hooks.onRoster(this.roster);
     });
@@ -137,6 +144,15 @@ export class RoomNet {
     this.roster = [...this.roster, { id, name: String(m.name || "Гість").slice(0, 24) }];
     this.broadcastRoster();
     this.meshSync();
+    // учасник, який зайшов пізніше, теж має бачити «випадкових гостей»
+    this.auxStreams.forEach((v, auxId) => {
+      const p = this.peer;
+      if (!p) return;
+      const call = p.call(id, v.stream, { metadata: { aux: true, auxId, name: v.name } });
+      if (!call) return;
+      const list = this.auxCalls.get(auxId) ?? [];
+      this.auxCalls.set(auxId, [...list, call]);
+    });
   }
 
   /* ── гість: підключення до хоста ── */
@@ -148,7 +164,7 @@ export class RoomNet {
       this.peer = p;
       this.hooks.onStatus("connecting");
       p.on("connection", (conn) => this.wireData(conn));
-      p.on("call", (call) => this.acceptCall(call));
+      p.on("call", (call) => this.routeCall(call));
       p.on("error", (e) => {
         const t = (e as { type?: string }).type;
         if (t === "peer-unavailable" && this.roster.length === 0 && !this.disposed) {
@@ -244,9 +260,83 @@ export class RoomNet {
     }
   }
 
+  /* ── маршрутизація вхідних медіа-викликів ──
+     aux-виклик (metadata.aux) — це потік «випадкового гостя», який хост
+     ретранслює всім; звичайний — mesh-з'єднання учасників.               */
+  private routeCall(call: MediaConnection) {
+    const meta = (call as MediaConnection & { metadata?: { aux?: boolean } }).metadata;
+    if (meta?.aux) this.acceptAuxCall(call);
+    else this.acceptCall(call);
+  }
+
   private acceptCall(call: MediaConnection) {
     call.answer(this.stream);
     this.wireCall(call.peer, call);
+  }
+
+  /* ── прийом aux-потоку (на боці учасника, не хоста) ──
+     Відповідаємо порожнім потоком (нам нічого слати у зворотному
+     напрямку), головне — отримати відео випадкового гостя від хоста.   */
+  private acceptAuxCall(call: MediaConnection) {
+    const meta = (call as MediaConnection & { metadata?: { aux?: boolean; auxId?: string; name?: string } }).metadata;
+    const auxId = meta?.auxId ?? call.peer;
+    const auxName = meta?.name ?? "Гість";
+    call.answer(this.emptyStream);
+    const list = this.auxCalls.get(auxId) ?? [];
+    this.auxCalls.set(auxId, [...list, call]);
+    call.on("stream", (s) => {
+      if (s.getTracks().length > 0) this.hooks.onAuxStream?.(auxId, auxName, s);
+    });
+    call.on("close", () => {
+      const arr = this.auxCalls.get(auxId) ?? [];
+      this.auxCalls.set(auxId, arr.filter((c) => c !== call));
+      if ((this.auxCalls.get(auxId) ?? []).length === 0) this.hooks.onAuxGone?.(auxId);
+    });
+    call.on("error", () => {
+      /* noop */
+    });
+  }
+
+  /* ── хост: поділитися потоком випадкового гостя з усіма учасниками ── */
+  shareAuxStream(auxId: string, name: string, stream: MediaStream) {
+    if (!this.isHost || !this.peer) return;
+    this.auxStreams.set(auxId, { name, stream });
+    this.sendAuxToAll(auxId, name, stream);
+  }
+
+  private sendAuxToAll(auxId: string, name: string, stream: MediaStream) {
+    const p = this.peer;
+    if (!p) return;
+    for (const m of this.roster) {
+      if (m.id === this.myId) continue;
+      const already = (this.auxCalls.get(auxId) ?? []).some((c) => c.peer === m.id);
+      if (already) continue;
+      const call = p.call(m.id, stream, { metadata: { aux: true, auxId, name } });
+      if (!call) continue;
+      const list = this.auxCalls.get(auxId) ?? [];
+      this.auxCalls.set(auxId, [...list, call]);
+      call.on("close", () => {
+        const arr = this.auxCalls.get(auxId) ?? [];
+        this.auxCalls.set(auxId, arr.filter((c) => c !== call));
+      });
+      call.on("error", () => {
+        /* noop */
+      });
+    }
+  }
+
+  /* хост: припинити ретрансляцію (гість вийшов / його кикнули) */
+  stopShareAuxStream(auxId: string) {
+    this.auxStreams.delete(auxId);
+    const list = this.auxCalls.get(auxId) ?? [];
+    list.forEach((c) => {
+      try {
+        c.close();
+      } catch {
+        /* noop */
+      }
+    });
+    this.auxCalls.delete(auxId);
   }
 
   private ice = new Map<string, string>();
@@ -379,6 +469,17 @@ export class RoomNet {
         /* noop */
       }
     });
+    this.auxCalls.forEach((list) =>
+      list.forEach((c) => {
+        try {
+          c.close();
+        } catch {
+          /* noop */
+        }
+      })
+    );
+    this.auxCalls.clear();
+    this.auxStreams.clear();
     this.conns.forEach((c) => {
       try {
         c.close();
