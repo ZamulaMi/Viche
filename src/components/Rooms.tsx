@@ -152,6 +152,10 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   const [roster, setRoster] = useState<Member[]>([]);
   const [streams, setStreams] = useState<Record<string, MediaStream>>({});
   const [hunters, setHunters] = useState<Hunter[]>([]);
+  const huntersRef = useRef<Hunter[]>([]);
+  useEffect(() => {
+    huntersRef.current = hunters;
+  }, [hunters]);
   const [searching, setSearching] = useState(false);
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState("");
@@ -201,10 +205,8 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   const leaveRoom = useCallback(() => {
     netRef.current?.leave();
     netRef.current = null;
-    setHunters((hs) => {
-      hs.forEach((h) => h.net.dispose());
-      return [];
-    });
+    huntersRef.current.forEach((h) => h.net.dispose());
+    setHunters([]);
     setScreen("home");
     setRoom(null);
     setStatus(null);
@@ -372,7 +374,15 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
         pendingHunter.current = null;
         const tail = peerId.replace(/[^0-9]/g, "") || peerId.slice(-3);
         const name = "Гість_" + tail;
-        setHunters((hs) => [...hs, { id: peerId, name, stream, net: hunter }]);
+        // upsert: подія "stream" може повторитись (ICE restart) — не
+        // додаємо дублікат, а оновлюємо потік того самого гостя
+        setHunters((hs) => {
+          const exists = hs.some((h) => h.net === hunter || h.id === peerId);
+          if (exists) {
+            return hs.map((h) => (h.net === hunter || h.id === peerId ? { ...h, stream } : h));
+          }
+          return [...hs, { id: peerId, name, stream, net: hunter }];
+        });
         push("sys", `${name} ${t("room.guestJoined")} · ${t("room.randomBadge")}`);
         setSearching(false);
       },
@@ -389,12 +399,11 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   };
 
   const kickHunter = (id: string) => {
-    setHunters((hs) => {
-      const h = hs.find((x) => x.id === id);
-      h?.net.dispose();
-      if (h) push("sys", `${h.name} ${t("room.guestLeft")}`);
-      return hs.filter((x) => x.id !== id);
-    });
+    const h = huntersRef.current.find((x) => x.id === id);
+    if (!h) return;
+    h.net.dispose();
+    push("sys", `${h.name} ${t("room.guestLeft")}`);
+    setHunters((hs) => hs.filter((x) => x.id !== id));
   };
 
   const replaceHunter = async (id: string) => {
