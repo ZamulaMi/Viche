@@ -30,6 +30,8 @@ type RMsg =
   | { type: "roster"; members: Member[] }
   | { type: "chat"; from: string; name: string; text: string }
   | { type: "kick" }
+  | { type: "poke" } // «ти мав мені подзвонити» — прискорює mesh
+  | { type: "aux-gone"; id: string } // випадковий гість видалений
   | { type: "full" };
 
 export type RoomHooks = {
@@ -41,6 +43,9 @@ export type RoomHooks = {
   onKicked: () => void;
   /** зведення ICE-шляхів mesh-з'єднань: "relay ×2 · lan" тощо */
   onIceInfo?: (info: string) => void;
+  /** випадковий гість, чий потік ретранслює хост (бачать усі учасники) */
+  onAuxStream?: (auxId: string, name: string, stream: MediaStream) => void;
+  onAuxGone?: (auxId: string) => void;
 };
 
 const PREFIX = "viche-v1-r-";
