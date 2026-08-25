@@ -12,7 +12,7 @@
    ───────────────────────────────────────────────────────────── */
 import Peer from "peerjs";
 import type { DataConnection, MediaConnection } from "peerjs";
-import { attachNetRecovery, restartIceOn } from "./net";
+import { attachNetRecovery, iceConfig, restartIceOn } from "./net";
 import { roomIdStr, type RoomId } from "./sim";
 
 export type Member = { id: string; name: string };
@@ -42,7 +42,6 @@ export type RoomHooks = {
 };
 
 const PREFIX = "viche-v1-r-";
-const iceCfg = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
 export class RoomNet {
   readonly room: RoomId;
@@ -80,7 +79,7 @@ export class RoomNet {
 
   /* ── спроба стати хостом; якщо ID зайнятий — приєднуємось гостем ── */
   private tryHost() {
-    const p = new Peer(this.hostId, { debug: 0, config: iceCfg });
+    const p = new Peer(this.hostId, { debug: 0, config: iceConfig });
     p.on("open", () => {
       if (this.disposed) return p.destroy();
       this.peer = p;
@@ -136,7 +135,7 @@ export class RoomNet {
   /* ── гість: підключення до хоста ── */
   private joinAsGuest() {
     if (this.disposed) return;
-    const p = new Peer({ debug: 0, config: iceCfg });
+    const p = new Peer({ debug: 0, config: iceConfig });
     p.on("open", () => {
       if (this.disposed) return p.destroy();
       this.peer = p;

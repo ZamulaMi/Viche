@@ -46,8 +46,25 @@ export type MatchHooks = {
 type Waiter = { kind: "self" } | { kind: "guest"; conn: DataConnection; id: string };
 type Msg = { type: "hello" } | { type: "wait" } | { type: "pair"; with: string; initiator: boolean };
 
-const iceConfig = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+/* STUN — визначає публічні адреси; TURN (Metered Open Relay) —
+   обов'язковий для глобальної мережі, коли обидва боки за суворим NAT
+   (саме тому "в локальній — працює, в глобальній — ні" без нього).   */
+export const iceConfig: RTCConfiguration = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:openrelay.metered.ca:80" },
+    {
+      urls: [
+        "turn:openrelay.metered.ca:80",
+        "turn:openrelay.metered.ca:80?transport=tcp",
+        "turn:openrelay.metered.ca:443",
+        "turns:openrelay.metered.ca:443?transport=tcp",
+      ],
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+  ],
+  iceCandidatePoolSize: 2,
 };
 
 /* Повторне встановлення медіа після зміни мережі (Wi-Fi ↔ мобільні дані):
