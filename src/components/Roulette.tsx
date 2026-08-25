@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LANGS, TAGS, shortId, type Filters, type Peer } from "../lib/sim";
+import { LANGS, TAGS, makePeer, shortId, type LangCode, type Peer } from "../lib/sim";
 import type { LocalMedia } from "../lib/rtc";
-import { FALLBACK_WAIT_MS, MatchClient, type MatchResult } from "../lib/net";
+import { RouletteNet, type RouletteFilters } from "../lib/roulettenet";
 import { useI18n, type DictKey } from "../i18n";
 import { useScramble } from "../lib/hooks";
 import CaptchaModal, { captchaToken } from "./Captcha";
@@ -19,26 +19,23 @@ type Props = {
 const fmtElapsed = (s: number) =>
   `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 
+const LANG_OPTS: Array<LangCode | "any"> = ["any", ...LANGS];
+
 export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
-  const { t, lang } = useI18n();
+  const { t } = useI18n();
   const [phase, setPhase] = useState<Phase>("idle");
-  const [filters, setFilters] = useState<Filters>({ gender: "any", lang, tags: [] });
+  const [filters, setFilters] = useState<RouletteFilters>({ gender: "any", lang: "any", tags: [] });
   const [peer, setPeer] = useState<Peer | null>(null);
   const [advanced, setAdvanced] = useState(false);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [elapsed, setElapsed] = useState(0);
-  const [chat, setChat] = useState<MatchResult["chat"] | null>(null);
-  const [orient, setOrient] = useState<"land" | "port">("land");
   const [ice, setIce] = useState("");
+  const [orient, setOrient] = useState<"land" | "port">("land");
+  const [slot, setSlot] = useState(-1);
 
-  const clientRef = useRef<MatchClient | null>(null);
-  const closeRef = useRef<(() => void) | null>(null);
-  const speakRef = useRef<((b: boolean) => void) | null>(null);
+  const netRef = useRef<RouletteNet | null>(null);
   const lmRef = useRef(localMedia);
-  const hasSearched = useRef(false);
-  const runRef = useRef(0);
   const liveRef = useRef(true);
-  const waitTimer = useRef(0);
   const filtersRef = useRef(filters);
   const tRef = useRef(t);
   const toastRef = useRef(onToast);
@@ -56,26 +53,13 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
 
   const sessionId = useMemo(() => "SES-" + shortId(4), []);
 
-  const clearWait = () => {
-    window.clearTimeout(waitTimer.current);
-    waitTimer.current = 0;
-  };
-
-  const closeRemote = useCallback(() => {
-    closeRef.current?.();
-    closeRef.current = null;
-    setRemoteStream(null);
-  }, []);
-
+  /* демонтування: прибираємо мережу повністю */
   useEffect(() => {
     liveRef.current = true;
     return () => {
       liveRef.current = false;
-      runRef.current++;
-      clearWait();
-      closeRef.current?.();
-      clientRef.current?.dispose();
-      clientRef.current = null;
+      netRef.current?.dispose();
+      netRef.current = null;
     };
   }, []);
 
@@ -87,80 +71,58 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
     return () => window.clearInterval(id);
   }, [busy]);
 
-  const openClient = useCallback(
-    (lm: LocalMedia) => {
-      if (clientRef.current) return clientRef.current;
-      const client = new MatchClient(lm.stream, {
-        onMode: (m) => {
-          if (m === "demo" && hasSearched.current) {
-            toastRef.current(tRef.current("toast.demoFallback"), "warn");
-          }
-        },
-        onQueued: () => {
-          clearWait();
-          waitTimer.current = window.setTimeout(() => {
-            clientRef.current?.demoPairOnce();
-          }, FALLBACK_WAIT_MS);
-        },
-        onPair: (r) => {
-          if (!liveRef.current) {
-            r.close();
-            return;
-          }
-          clearWait();
-          setOrient("land");
-          setPeer(r.peer);
-          setChat(r.chat ?? null);
-          speakRef.current = r.setSpeaking ?? null;
-          closeRef.current = r.close;
-          setRemoteStream(r.stream);
-          setPhase("live");
-        },
-        onPeerLeft: () => {
-          clearWait();
-          closeRemote();
-          setPeer(null);
-          setChat(null);
-          setIce("");
-          speakRef.current = null;
-          if (!liveRef.current) return;
-          toastRef.current(tRef.current("toast.peerLeft"), "warn");
-          // автоматично шукаємо наступного
-          window.setTimeout(() => {
-            if (liveRef.current) beginSearchRef.current(filtersRef.current);
-          }, 700);
-        },
-        onNotice: (key) => {
-          toastRef.current(tRef.current(key as DictKey), "warn");
-        },
-        onIce: setIce,
-      });
-      clientRef.current = client;
-      return client;
-    },
-    [closeRemote]
-  );
+  const openNet = useCallback((lm: LocalMedia) => {
+    if (netRef.current) return netRef.current;
+    const net = new RouletteNet(lm.stream, {
+      onState: (s) => {
+        if (!liveRef.current) return;
+        // «live» встановлює onPair (коли вже є стрім і партнер)
+        if (s === "searching" || s === "connecting") setPhase("searching");
+        else if (s === "idle") setPhase("idle");
+      },
+      onSlot: (sl) => setSlot(sl),
+      onPair: (stream, peerId) => {
+        if (!liveRef.current) return;
+        const tail = peerId.replace(/[^0-9]/g, "") || peerId.slice(-3);
+        const p: Peer = {
+          ...makePeer({ tags: [], langs: [] }),
+          id: tail,
+          name: "Учасник_" + tail,
+          real: true,
+        };
+        setPeer(p);
+        setRemoteStream(stream);
+        setOrient("land");
+        setPhase("live");
+      },
+      onPeerLeft: () => {
+        if (!liveRef.current) return;
+        setPeer(null);
+        setRemoteStream(null);
+        setIce("");
+        setElapsed(0);
+        toastRef.current(tRef.current("toast.peerLeft"), "warn");
+        // пошук відновлює сам net — жодних ботів
+      },
+      onIce: (i) => setIce(i),
+    });
+    netRef.current = net;
+    return net;
+  }, []);
 
   const beginSearch = useCallback(
-    (f: Filters) => {
-      runRef.current++;
-      clearWait();
-      closeRemote();
+    (f: RouletteFilters) => {
       setPeer(null);
+      setRemoteStream(null);
       setElapsed(0);
       setOrient("land");
       setIce("");
       setPhase("searching");
-      hasSearched.current = true;
       const lm = lmRef.current;
-      if (lm) openClient(lm).search(f);
+      if (lm) openNet(lm).search(f);
     },
-    [closeRemote, openClient]
+    [openNet]
   );
-  const beginSearchRef = useRef(beginSearch);
-  useEffect(() => {
-    beginSearchRef.current = beginSearch;
-  }, [beginSearch]);
 
   const start = async () => {
     try {
@@ -172,23 +134,28 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
       }
       beginSearch(filtersRef.current);
     } catch {
-      onToast(t("toast.demoFallback"), "warn");
+      onToast(t("toast.mic"), "warn");
     }
   };
 
   const stop = () => {
-    runRef.current++;
-    clearWait();
-    clientRef.current?.stop();
-    closeRemote();
+    netRef.current?.stop();
     setPeer(null);
+    setRemoteStream(null);
     setElapsed(0);
     setOrient("land");
     setIce("");
     setPhase("idle");
   };
 
-  const next = () => beginSearch(filtersRef.current);
+  const next = () => {
+    netRef.current?.next();
+    setPeer(null);
+    setRemoteStream(null);
+    setElapsed(0);
+    setIce("");
+    setPhase("searching");
+  };
 
   const stateKey = phase === "searching" || phase === "live" ? phase : "standby";
   const stateWord = useScramble(t(`state.${stateKey}`), 60);
@@ -196,7 +163,7 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
 
   const ledCls = phase === "live" ? "led-mint" : phase === "searching" ? "led-amber" : "";
 
-  /* реальний шлях з'єднання пари: TURN-relay / STUN / LAN */
+  /* реальний шлях з'єднання пари: relay / stun / lan */
   const iceView = (() => {
     if (!ice || phase !== "live") return null;
     if (ice === "relay") return { txt: "p2p · turn-relay", cls: "text-[var(--c-mint)]" };
@@ -206,6 +173,9 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
     if (ice === "disconnected") return { txt: "ice: reconnect", cls: "text-[var(--c-amber)]" };
     return { txt: "ice: connecting", cls: "text-[var(--c-amber)]" };
   })();
+
+  const genderLabel =
+    filters.gender === "any" ? t("flt.any") : filters.gender === "m" ? t("flt.male") : t("flt.female");
 
   return (
     <div>
@@ -223,9 +193,9 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
               <VideoChat
                 peer={peer}
                 remoteStream={remoteStream}
-                setRemoteSpeaking={(b) => speakRef.current?.(b)}
+                setRemoteSpeaking={() => {}}
                 onOrient={setOrient}
-                chat={chat ?? undefined}
+                chat={netRef.current ? { ...netRef.current.chat } : undefined}
                 localMedia={localMedia}
                 onLeave={(k) => (k === "next" ? next() : stop())}
                 onReport={() => onToast(t("rep.sent"), "ok")}
@@ -256,16 +226,9 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
                       <h2 className="font-display font-900 text-2xl sm:text-4xl tracking-tight">{titleWord}</h2>
                       <p className="mt-3 text-sm sm:text-[15px] text-[var(--c-dim)] leading-relaxed">{t("idle.sub")}</p>
                       <div className="mt-5 flex flex-wrap justify-center gap-2">
-                        {([[
-                          "idle.b1",
-                          <IconCheck key="a" className="w-3.5 h-3.5" />,
-                        ], [
-                          "idle.b2",
-                          <IconCheck key="b" className="w-3.5 h-3.5" />,
-                        ], [
-                          "idle.b3",
-                          <IconFlag key="c" className="w-3.5 h-3.5" />,
-                        ]] as const).map(([k, ic]) => (
+                        {([["idle.b1", <IconCheck key="a" className="w-3.5 h-3.5" />],
+                           ["idle.b2", <IconCheck key="b" className="w-3.5 h-3.5" />],
+                           ["idle.b3", <IconFlag key="c" className="w-3.5 h-3.5" />]] as const).map(([k, ic]) => (
                           <span key={k} className="chip !cursor-default !text-[12px]">
                             {ic}
                             {t(k)}
@@ -283,6 +246,11 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
                       <p className="mt-1 font-mono text-[13px] text-[var(--c-amber)] caret">
                         {t("stat.elapsed")} · {fmtElapsed(elapsed)}
                       </p>
+                      {slot >= 0 && (
+                        <p className="mt-1 font-mono text-[11px] text-[var(--c-faint)]">
+                          viche-q-{String(slot).padStart(3, "0")}
+                        </p>
+                      )}
                       <button className="btn mt-6" onClick={stop}>
                         {t("ctl.stop")}
                       </button>
@@ -320,7 +288,7 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
               {phase === "idle" || phase === "captcha" ? t("ctl.start") : t("ctl.resume")}
             </button>
             {phase !== "idle" && phase !== "captcha" && (
-              <button className="btn btn-red" onClick={stop} disabled={busy}>
+              <button className="btn btn-red" onClick={stop}>
                 {t("ctl.stop")}
               </button>
             )}
@@ -352,9 +320,9 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
                 <div>
                   <p className="panel-title mb-2">{t("flt.lang")}</p>
                   <div className="flex flex-wrap gap-2">
-                    {LANGS.map((l) => (
+                    {LANG_OPTS.map((l) => (
                       <button key={l} className={`chip !px-3 font-mono ${filters.lang === l ? "chip-on" : ""}`} onClick={() => setFilters((f) => ({ ...f, lang: l }))}>
-                        {l.toUpperCase()}
+                        {l === "any" ? t("flt.any").toUpperCase() : l.toUpperCase()}
                       </button>
                     ))}
                   </div>
@@ -380,6 +348,10 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
                       );
                     })}
                   </div>
+                </div>
+                <div className="sm:col-span-2 font-mono text-[11px] text-[var(--c-faint)]">
+                  {t("flt.summary")}: {genderLabel} · {filters.lang === "any" ? t("flt.any").toUpperCase() : filters.lang.toUpperCase()} ·{" "}
+                  {filters.tags.length === 0 ? t("stat.noTags") : filters.tags.map((x) => "#" + x).join(" ")}
                 </div>
               </div>
             </div>

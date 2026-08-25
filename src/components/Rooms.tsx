@@ -1,18 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RoomNet, type Member, type RoomStatus } from "../lib/roomnet";
+import { RouletteNet } from "../lib/roulettenet";
 import {
   filterProfanity,
-  makePeer,
   makeRoomId,
   now,
   roomLink,
   roomIdStr,
   shortId,
-  simulateMatch,
-  type Peer as SimPeer,
   type RoomId,
 } from "../lib/sim";
-import { makeCanvasStream, type CanvasCtl, type LocalMedia } from "../lib/rtc";
+import type { LocalMedia } from "../lib/rtc";
 import { useI18n } from "../i18n";
 import { useScramble } from "../lib/hooks";
 import {
@@ -28,7 +26,9 @@ import {
   IconUserPlus,
 } from "./icons";
 
-type DemoGuest = { peer: SimPeer; ctl: CanvasCtl; stream: MediaStream };
+/* Випадковий гість — РЕАЛЬНА людина, знайдена мисливцем у глобальному
+   пулі рулетки (RouletteNet). Жодних ботів. */
+type Hunter = { id: string; name: string; stream: MediaStream; net: RouletteNet };
 type ChatMsg = {
   id: number;
   kind: "sys" | "msg";
@@ -150,7 +150,7 @@ export default function Rooms({ localMedia, ensureLocal, onToast, initialJoin }:
   const [iceInfo, setIceInfo] = useState("");
   const [roster, setRoster] = useState<Member[]>([]);
   const [streams, setStreams] = useState<Record<string, MediaStream>>({});
-  const [demoGuests, setDemoGuests] = useState<DemoGuest[]>([]);
+  const [hunters, setHunters] = useState<Hunter[]>([]);
   const [searching, setSearching] = useState(false);
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState("");
@@ -200,8 +200,8 @@ export default function Rooms({ localMedia, ensureLocal, onToast, initialJoin }:
   const leaveRoom = useCallback(() => {
     netRef.current?.leave();
     netRef.current = null;
-    setDemoGuests((gs) => {
-      gs.forEach((g) => g.ctl.close());
+    setHunters((hs) => {
+      hs.forEach((h) => h.net.dispose());
       return [];
     });
     setScreen("home");
@@ -337,34 +337,65 @@ export default function Rooms({ localMedia, ensureLocal, onToast, initialJoin }:
     await copyText(url);
   };
 
-  /* Add Random — гібридна фішка: демо-гість із «пулу рулетки» */
-  const addRandom = async () => {
-    if (searching || !netRef.current) return;
-    if (roster.length + demoGuests.length >= seats) {
-      onToast(`${t("room.seats")}: ${seats}`, "warn");
-      return;
-    }
-    setSearching(true);
-    await simulateMatch({ gender: "any", lang: "uk", tags: [] }, true);
-    if (!aliveRef.current) return;
-    const p = makePeer();
-    const ctl = makeCanvasStream(p.name.split("_")[1] ?? "GG", p.hue);
-    setDemoGuests((gs) => [...gs, { peer: p, ctl, stream: ctl.stream }]);
-    push("sys", `${p.name} ${t("room.guestJoined")} · ${t("room.demoBadge")}`);
+  /* Add Random — гібридна фішка: мисливець шукає у глобальному пулі
+     рулетки РЕАЛЬНУ людину і підключає її справжній потік до кімнати.
+     Жодних ботів: якщо нікого немає — просто шукає далі. */
+  const pendingHunter = useRef<RouletteNet | null>(null);
+
+  const cancelHunt = () => {
+    pendingHunter.current?.dispose();
+    pendingHunter.current = null;
     setSearching(false);
   };
 
-  const kickDemo = (id: string) => {
-    setDemoGuests((gs) => {
-      const g = gs.find((x) => x.peer.id === id);
-      g?.ctl.close();
-      if (g) push("sys", `${g.peer.name} ${t("room.guestLeft")}`);
-      return gs.filter((x) => x.peer.id !== id);
+  const addRandom = async () => {
+    if (!netRef.current || !room) return;
+    if (searching) {
+      cancelHunt();
+      return;
+    }
+    if (roster.length + hunters.length >= seats) {
+      onToast(`${t("room.seats")}: ${seats}`, "warn");
+      return;
+    }
+    const lm = await ensureLocal();
+    if (!aliveRef.current) return;
+    setSearching(true);
+    const hunter = new RouletteNet(lm.stream, {
+      onState: () => {},
+      onSlot: () => {},
+      onPair: (stream, peerId) => {
+        if (!aliveRef.current) return;
+        pendingHunter.current = null;
+        const tail = peerId.replace(/[^0-9]/g, "") || peerId.slice(-3);
+        const name = "Гість_" + tail;
+        setHunters((hs) => [...hs, { id: peerId, name, stream, net: hunter }]);
+        push("sys", `${name} ${t("room.guestJoined")} · ${t("room.randomBadge")}`);
+        setSearching(false);
+      },
+      onPeerLeft: () => {
+        if (!aliveRef.current) return;
+        setHunters((hs) => hs.filter((h) => h.net !== hunter));
+        hunter.dispose();
+        push("sys", t("room.guestLeft"));
+      },
+      onIce: () => {},
+    });
+    pendingHunter.current = hunter;
+    hunter.search({ gender: "any", lang: "any", tags: [] });
+  };
+
+  const kickHunter = (id: string) => {
+    setHunters((hs) => {
+      const h = hs.find((x) => x.id === id);
+      h?.net.dispose();
+      if (h) push("sys", `${h.name} ${t("room.guestLeft")}`);
+      return hs.filter((x) => x.id !== id);
     });
   };
 
-  const replaceDemo = async (id: string) => {
-    kickDemo(id);
+  const replaceHunter = async (id: string) => {
+    kickHunter(id);
     await addRandom();
   };
 
@@ -380,7 +411,7 @@ export default function Rooms({ localMedia, ensureLocal, onToast, initialJoin }:
 
   const isHost = !!room && status === "host";
   const link = room ? roomLink(room) : "";
-  const filled = roster.length + demoGuests.length;
+  const filled = roster.length + hunters.length;
 
   /* ── Екран кімнати ── */
   if (screen === "room" && room) {
@@ -447,21 +478,21 @@ export default function Rooms({ localMedia, ensureLocal, onToast, initialJoin }:
                   </div>
                 );
               })}
-              {/* демо-гості (гібридний режим) */}
-              {demoGuests.map((g) => (
-                <div key={g.peer.id} className="relative">
+              {/* випадкові гості — реальні люди з пулу рулетки */}
+              {hunters.map((g) => (
+                <div key={g.id} className="relative">
                   <Tile
                     stream={g.stream}
-                    name={g.peer.name}
-                    badge={t("room.demoBadge")}
-                    badgeTone="faint"
-                    onKick={isHost ? () => kickDemo(g.peer.id) : undefined}
+                    name={g.name}
+                    badge={t("room.randomBadge")}
+                    badgeTone="mint"
+                    onKick={isHost ? () => kickHunter(g.id) : undefined}
                     kickLabel={t("room.kick")}
                   />
                   {isHost && (
                     <button
                       className="absolute -bottom-2.5 right-3 chip !text-[11px] !py-1 shadow-[var(--c-shadow)]"
-                      onClick={() => void replaceDemo(g.peer.id)}
+                      onClick={() => void replaceHunter(g.id)}
                     >
                       <IconUserPlus className="w-3.5 h-3.5" />
                       {t("room.replace")}
