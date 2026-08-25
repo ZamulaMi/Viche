@@ -66,7 +66,6 @@ export class RoomNet {
      самі потоки, щоб учасник, який зайшов пізніше, теж їх отримав. ── */
   private auxCalls = new Map<string, MediaConnection[]>(); // auxId → виклики до учасників
   private auxStreams = new Map<string, { name: string; stream: MediaStream }>();
-  private emptyStream = new MediaStream();
 
   constructor(
     room: RoomId,
@@ -275,13 +274,15 @@ export class RoomNet {
   }
 
   /* ── прийом aux-потоку (на боці учасника, не хоста) ──
-     Відповідаємо порожнім потоком (нам нічого слати у зворотному
-     напрямку), головне — отримати відео випадкового гостя від хоста.   */
+     ВАЖЛИВО: відповідаємо СВОЇМ реальним потоком, а не порожнім.
+     SDP-answer без жодного треку відхиляє m-line → медіа не тече в
+     обох напрямках, і відео гостя ніколи не дійде. Хост зворотний
+     потік ігнорує (на aux-викликах не слухає "stream").               */
   private acceptAuxCall(call: MediaConnection) {
     const meta = (call as MediaConnection & { metadata?: { aux?: boolean; auxId?: string; name?: string } }).metadata;
     const auxId = meta?.auxId ?? call.peer;
     const auxName = meta?.name ?? "Гість";
-    call.answer(this.emptyStream);
+    call.answer(this.stream);
     const list = this.auxCalls.get(auxId) ?? [];
     this.auxCalls.set(auxId, [...list, call]);
     call.on("stream", (s) => {

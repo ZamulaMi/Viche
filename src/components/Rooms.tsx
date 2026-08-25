@@ -74,6 +74,7 @@ function Tile({
   badge,
   badgeTone = "mint",
   muted,
+  live,
   onKick,
   kickLabel,
 }: {
@@ -82,6 +83,8 @@ function Tile({
   badge?: string;
   badgeTone?: "mint" | "amber" | "faint";
   muted?: boolean;
+  /** пульсуючий live-індикатор у бейджі (рельатрансляція) */
+  live?: boolean;
   onKick?: () => void;
   kickLabel?: string;
 }) {
@@ -111,7 +114,8 @@ function Tile({
         {muted && <IconMicOff className="w-3.5 h-3.5 text-white/70 flex-none" />}
       </div>
       {badge && (
-        <span className={`absolute top-2 left-2 font-mono text-[10px] px-2 py-0.5 rounded-md border bg-black/55 backdrop-blur-sm ${tone}`}>
+        <span className={`absolute top-2 left-2 font-mono text-[10px] px-2 py-0.5 rounded-md border bg-black/55 backdrop-blur-sm flex items-center gap-1.5 ${tone}`}>
+          {live && <span className="w-1.5 h-1.5 rounded-full bg-current animate-[vblink_1.4s_ease-in-out_infinite]" />}
           {badge}
         </span>
       )}
@@ -541,6 +545,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
                   name={a.name}
                   badge={t("room.randomBadge")}
                   badgeTone="mint"
+                  live
                 />
               ))}
               {/* вільні місця */}
