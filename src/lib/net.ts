@@ -48,10 +48,10 @@ export type MatchHooks = {
 type Waiter = { kind: "self" } | { kind: "guest"; conn: DataConnection; id: string };
 type Msg = { type: "hello" } | { type: "wait" } | { type: "pair"; with: string; initiator: boolean };
 
-/* NAT traversal. У локальній мережі P2P з'єднується напряму (host),
-   у глобальній — потрібен STUN/TURN. Щоб глобальний пошук працював
-   попри падіння окремих сервісів, беремо КІЛЬКА незалежних TURN
-   (UDP + TCP + TLS) — ICE пробує всі паралельно, виграє робочий.
+/* ГЛОБАЛЬНИЙ трафік: медіа завжди через TURN-relay (iceTransportPolicy:
+   "relay") — LAN-кандидати не використовуються взагалі. Кілька незалежних
+   TURN (UDP + TCP + TLS) — ICE пробує всі паралельно, виграє робочий,
+   тож глобальний пошук не залежить від падіння одного сервісу.
    Власний coturn (docker-compose): VITE_TURN_URL / _USERNAME / _CREDENTIAL. */
 const env = ((import.meta as unknown as { env?: Record<string, string | undefined> }).env) ?? {};
 const customTurn: RTCIceServer[] = env.VITE_TURN_URL
@@ -66,7 +66,6 @@ const customTurn: RTCIceServer[] = env.VITE_TURN_URL
 
 export const iceConfig: RTCConfiguration = {
   iceServers: [
-    { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
     ...customTurn,
     // Metered Open Relay — безкоштовний публічний TURN
     {
@@ -86,6 +85,10 @@ export const iceConfig: RTCConfiguration = {
       credential: "nextcloud",
     },
   ],
+  // ТІЛЬКИ глобальний трафік: жодних host/LAN-кандидатів — уся медіа
+  // йде через TURN-relay. Гарантовано з'єднує пари за будь-яким NAT
+  // (симетричний, подвійний, carrier-grade) у будь-якій мережі.
+  iceTransportPolicy: "relay",
   iceCandidatePoolSize: 2,
 };
 

@@ -147,6 +147,7 @@ export default function Rooms({ localMedia, ensureLocal, onToast, initialJoin }:
 
   const [room, setRoom] = useState<RoomId | null>(null);
   const [status, setStatus] = useState<RoomStatus | null>(null);
+  const [iceInfo, setIceInfo] = useState("");
   const [roster, setRoster] = useState<Member[]>([]);
   const [streams, setStreams] = useState<Record<string, MediaStream>>({});
   const [demoGuests, setDemoGuests] = useState<DemoGuest[]>([]);
@@ -206,6 +207,7 @@ export default function Rooms({ localMedia, ensureLocal, onToast, initialJoin }:
     setScreen("home");
     setRoom(null);
     setStatus(null);
+    setIceInfo("");
     setRoster([]);
     prevRoster.current = [];
     setStreams({});
@@ -271,6 +273,7 @@ export default function Rooms({ localMedia, ensureLocal, onToast, initialJoin }:
             onToast(tRef.current("room.kicked"), "warn");
             leaveRoom();
           },
+          onIceInfo: (info) => aliveRef.current && setIceInfo(info),
         });
         netRef.current = net;
       } finally {
@@ -402,6 +405,17 @@ export default function Rooms({ localMedia, ensureLocal, onToast, initialJoin }:
           <span className="chip !cursor-default !text-[11px] font-mono">
             {filled}/{seats} · {t("room.members").toLowerCase()}
           </span>
+          {iceInfo && (
+            <span
+              className={`chip !cursor-default !text-[11px] font-mono ${
+                iceInfo.includes("relay") ? "chip-on" : ""
+              }`}
+              title="WebRTC ICE paths (mesh)"
+            >
+              {iceInfo.includes("relay") ? "turn · " : "ice · "}
+              {iceInfo}
+            </span>
+          )}
           <button className="btn btn-red ml-auto" onClick={leaveRoom}>
             <IconEnd className="w-4 h-4" />
             {t("room.leave")}
