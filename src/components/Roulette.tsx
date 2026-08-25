@@ -29,6 +29,7 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
   const [elapsed, setElapsed] = useState(0);
   const [chat, setChat] = useState<MatchResult["chat"] | null>(null);
   const [orient, setOrient] = useState<"land" | "port">("land");
+  const [ice, setIce] = useState("");
 
   const clientRef = useRef<MatchClient | null>(null);
   const closeRef = useRef<(() => void) | null>(null);
@@ -120,6 +121,7 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
           closeRemote();
           setPeer(null);
           setChat(null);
+          setIce("");
           speakRef.current = null;
           if (!liveRef.current) return;
           toastRef.current(tRef.current("toast.peerLeft"), "warn");
@@ -131,6 +133,7 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
         onNotice: (key) => {
           toastRef.current(tRef.current(key as DictKey), "warn");
         },
+        onIce: setIce,
       });
       clientRef.current = client;
       return client;
@@ -146,6 +149,7 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
       setPeer(null);
       setElapsed(0);
       setOrient("land");
+      setIce("");
       setPhase("searching");
       hasSearched.current = true;
       const lm = lmRef.current;
@@ -180,6 +184,7 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
     setPeer(null);
     setElapsed(0);
     setOrient("land");
+    setIce("");
     setPhase("idle");
   };
 
@@ -190,6 +195,17 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
   const titleWord = useScramble(t("idle.title"), 150);
 
   const ledCls = phase === "live" ? "led-mint" : phase === "searching" ? "led-amber" : "";
+
+  /* реальний шлях з'єднання пари: TURN-relay / STUN / LAN */
+  const iceView = (() => {
+    if (!ice || phase !== "live") return null;
+    if (ice === "relay") return { txt: "p2p · turn-relay", cls: "text-[var(--c-mint)]" };
+    if (ice === "stun") return { txt: "p2p · stun", cls: "text-[var(--c-mint)]" };
+    if (ice === "lan" || ice === "p2p") return { txt: "p2p · direct", cls: "text-[var(--c-mint)]" };
+    if (ice === "failed") return { txt: "ice: failed", cls: "text-[var(--c-red)]" };
+    if (ice === "disconnected") return { txt: "ice: reconnect", cls: "text-[var(--c-amber)]" };
+    return { txt: "ice: connecting", cls: "text-[var(--c-amber)]" };
+  })();
 
   return (
     <div>
@@ -284,6 +300,14 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
             <span className="hidden sm:block font-mono text-[11px] text-[var(--c-faint)]">
               {peer && phase === "live" ? `${peer.name} · #${peer.id}` : sessionId}
             </span>
+            {iceView && (
+              <span
+                className={`font-mono text-[10.5px] px-2 py-0.5 rounded-md border border-[var(--c-line)] bg-[var(--c-bg2)] ${iceView.cls}`}
+                title="WebRTC ICE path"
+              >
+                {iceView.txt}
+              </span>
+            )}
             <span className="ml-auto tick-id text-[11px]">{phase === "live" && peer ? `PAIR-${peer.id}` : sessionId}</span>
           </div>
         </div>

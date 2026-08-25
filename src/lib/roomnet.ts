@@ -12,7 +12,7 @@
    ───────────────────────────────────────────────────────────── */
 import Peer from "peerjs";
 import type { DataConnection, MediaConnection } from "peerjs";
-import { attachNetRecovery, iceConfig, restartIceOn } from "./net";
+import { attachNetRecovery, iceConfig, icePathInfo, restartIceOn } from "./net";
 import { roomIdStr, type RoomId } from "./sim";
 
 export type Member = { id: string; name: string };
@@ -39,6 +39,8 @@ export type RoomHooks = {
   onPeerGone: (peerId: string) => void;
   onChat: (fromId: string, name: string, text: string) => void;
   onKicked: () => void;
+  /** зведення ICE-шляхів mesh-з'єднань: "relay ×2 · lan" тощо */
+  onIceInfo?: (info: string) => void;
 };
 
 const PREFIX = "viche-v1-r-";
@@ -242,27 +244,86 @@ export class RoomNet {
     this.wireCall(call.peer, call);
   }
 
+  private ice = new Map<string, string>();
+
+  private emitIce() {
+    if (!this.hooks.onIceInfo) return;
+    const agg = new Map<string, number>();
+    this.ice.forEach((v) => agg.set(v, (agg.get(v) ?? 0) + 1));
+    const parts = [...agg.entries()].map(([k, n]) => (n > 1 ? `${k} ×${n}` : k));
+    this.hooks.onIceInfo(parts.join(" · "));
+  }
+
   private wireCall(pid: string, call: MediaConnection) {
     this.calls.set(pid, call);
+    this.ice.set(pid, "connecting");
+    this.emitIce();
     call.on("stream", (s) => this.hooks.onPeerStream(pid, s));
     call.on("close", () => {
+      clearWd();
       if (this.calls.get(pid) === call) {
         this.calls.delete(pid);
+        this.ice.delete(pid);
+        this.emitIce();
         if (!this.disposed) this.hooks.onPeerGone(pid);
       }
     });
     call.on("error", () => {
       /* noop */
     });
+    /* watchdog: 15 c → restartIce, 30 c → скидаємо пару
+       (глобальні учасники за суворим NAT без робочого TURN) */
     let restarted = false;
-    try {
-      call.peerConnection?.addEventListener?.("connectionstatechange", () => {
-        if (call.peerConnection?.connectionState !== "failed" || restarted) return;
-        restarted = true;
-        restartIceOn(call);
-      });
-    } catch {
-      /* noop */
+    let t15 = 0;
+    let t30 = 0;
+    const clearWd = () => {
+      window.clearTimeout(t15);
+      window.clearTimeout(t30);
+    };
+    const pc = call.peerConnection;
+    if (pc) {
+      try {
+        pc.addEventListener("connectionstatechange", () => {
+          if (this.calls.get(pid) !== call || this.disposed) return;
+          const st = pc.connectionState;
+          if (st === "connected") {
+            clearWd();
+            void icePathInfo(pc).then((tp) => {
+              this.ice.set(pid, tp);
+              this.emitIce();
+            });
+          } else {
+            this.ice.set(pid, st === "connecting" ? "connecting" : st);
+            this.emitIce();
+          }
+          if (st === "failed") {
+            if (!restarted) {
+              restarted = true;
+              restartIceOn(call);
+            } else {
+              try {
+                call.close();
+              } catch {
+                /* noop */
+              }
+            }
+          }
+        });
+      } catch {
+        /* noop */
+      }
+      t15 = window.setTimeout(() => {
+        if (this.calls.get(pid) === call && pc.connectionState !== "connected") restartIceOn(call);
+      }, 15000);
+      t30 = window.setTimeout(() => {
+        if (this.calls.get(pid) !== call || pc.connectionState === "connected") return;
+        clearWd();
+        try {
+          call.close();
+        } catch {
+          /* noop */
+        }
+      }, 30000);
     }
   }
 

@@ -41,18 +41,34 @@ export type MatchHooks = {
   onPair: (r: MatchResult) => void;
   onPeerLeft: () => void;    // партнер закрив дзвінок
   onNotice: (key: string) => void; // короткі службові повідомлення
+  /** стани ICE: "connecting" | "failed" | …, після з'єднання — шлях: relay/stun/lan */
+  onIce?: (info: string) => void;
 };
 
 type Waiter = { kind: "self" } | { kind: "guest"; conn: DataConnection; id: string };
 type Msg = { type: "hello" } | { type: "wait" } | { type: "pair"; with: string; initiator: boolean };
 
-/* STUN — визначає публічні адреси; TURN (Metered Open Relay) —
-   обов'язковий для глобальної мережі, коли обидва боки за суворим NAT
-   (саме тому "в локальній — працює, в глобальній — ні" без нього).   */
+/* NAT traversal. У локальній мережі P2P з'єднується напряму (host),
+   у глобальній — потрібен STUN/TURN. Щоб глобальний пошук працював
+   попри падіння окремих сервісів, беремо КІЛЬКА незалежних TURN
+   (UDP + TCP + TLS) — ICE пробує всі паралельно, виграє робочий.
+   Власний coturn (docker-compose): VITE_TURN_URL / _USERNAME / _CREDENTIAL. */
+const env = ((import.meta as unknown as { env?: Record<string, string | undefined> }).env) ?? {};
+const customTurn: RTCIceServer[] = env.VITE_TURN_URL
+  ? [
+      {
+        urls: String(env.VITE_TURN_URL).split(",").map((s) => s.trim()),
+        username: env.VITE_TURN_USERNAME ? String(env.VITE_TURN_USERNAME) : undefined,
+        credential: env.VITE_TURN_CREDENTIAL ? String(env.VITE_TURN_CREDENTIAL) : undefined,
+      },
+    ]
+  : [];
+
 export const iceConfig: RTCConfiguration = {
   iceServers: [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:openrelay.metered.ca:80" },
+    { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+    ...customTurn,
+    // Metered Open Relay — безкоштовний публічний TURN
     {
       urls: [
         "turn:openrelay.metered.ca:80",
@@ -63,9 +79,43 @@ export const iceConfig: RTCConfiguration = {
       username: "openrelayproject",
       credential: "openrelayproject",
     },
+    // Резервний публічний TURN (Nextcloud demo)
+    {
+      urls: "turn:demo.nextcloud.com:443?transport=tcp",
+      username: "nextcloud",
+      credential: "nextcloud",
+    },
   ],
   iceCandidatePoolSize: 2,
 };
+
+/* Яким шляхом з'єдналась пара: relay (TURN) / stun / lan (direct) */
+export async function icePathInfo(pc: RTCPeerConnection): Promise<string> {
+  try {
+    const stats = await pc.getStats();
+    const types: string[] = [];
+    stats.forEach((r) => {
+      const rep = r as unknown as {
+        type: string;
+        state?: string;
+        nominated?: boolean;
+        localCandidateId?: string;
+        remoteCandidateId?: string;
+      };
+      if (rep.type === "candidate-pair" && (rep.state === "succeeded" || rep.nominated)) {
+        const l = stats.get(rep.localCandidateId ?? "") as unknown as { candidateType?: string } | undefined;
+        const rm = stats.get(rep.remoteCandidateId ?? "") as unknown as { candidateType?: string } | undefined;
+        if (l?.candidateType) types.push(l.candidateType);
+        if (rm?.candidateType) types.push(rm.candidateType);
+      }
+    });
+    if (types.includes("relay")) return "relay";
+    if (types.includes("srflx") || types.includes("prflx")) return "stun";
+    return types.length ? "lan" : "p2p";
+  } catch {
+    return "p2p";
+  }
+}
 
 /* Повторне встановлення медіа після зміни мережі (Wi-Fi ↔ мобільні дані):
    ICE restart на живих RTCPeerConnection — сигнали йдуть тим самим
@@ -382,23 +432,66 @@ export class MatchClient {
     this.expectFrom = null;
     // партнер відомий одначе — це закриває гонку для вхідного DataConnection
     this.partnerId = call.peer;
-    // watchdog: зміна мережі рве ICE — пробуємо restartIce, вдруге — peer left
+    /* ICE-телеметрія + watchdog:
+       15 c без з'єднання → restartIce (зміна мережі / повільний TURN);
+       30 c без з'єднання → скидаємо дзвінок (інакше глобальний пошук
+       «висить» вічно, коли всі TURN недоступні);
+       failed двічі → peer left.                                        */
     let restarted = false;
-    try {
-      call.peerConnection?.addEventListener?.("connectionstatechange", () => {
-        const st = call.peerConnection?.connectionState;
-        if (st !== "failed" || this.call !== call) return;
-        if (!restarted) {
-          restarted = true;
-          restartIceOn(call);
-        } else if (this.paired) {
+    let t15 = 0;
+    let t30 = 0;
+    const clearWd = () => {
+      window.clearTimeout(t15);
+      window.clearTimeout(t30);
+    };
+    this.hooks.onIce?.("connecting");
+    const pc = call.peerConnection;
+    if (pc) {
+      try {
+        pc.addEventListener("connectionstatechange", () => {
+          if (this.call !== call) return;
+          const st = pc.connectionState;
+          if (st === "connected") {
+            clearWd();
+            void icePathInfo(pc).then((tp) => this.hooks.onIce?.(tp));
+          } else {
+            this.hooks.onIce?.(st);
+          }
+          if (st === "failed") {
+            if (!restarted) {
+              restarted = true;
+              restartIceOn(call);
+            } else if (this.paired) {
+              clearWd();
+              this.call = null;
+              this.paired = false;
+              this.hooks.onPeerLeft();
+            }
+          }
+        });
+      } catch {
+        /* noop */
+      }
+      t15 = window.setTimeout(() => {
+        if (this.call === call && pc.connectionState !== "connected") restartIceOn(call);
+      }, 15000);
+      t30 = window.setTimeout(() => {
+        if (this.call !== call || pc.connectionState === "connected") return;
+        clearWd();
+        try {
+          call.close();
+        } catch {
+          /* noop */
+        }
+        if (this.paired) {
           this.call = null;
           this.paired = false;
           this.hooks.onPeerLeft();
+        } else if (this.searching) {
+          this.hooks.onNotice("toast.peerLeft");
+          this.search(this.lastFilters);
         }
-      });
-    } catch {
-      /* noop */
+      }, 30000);
     }
     call.on("stream", (s) => {
       if (this.call !== call) return;
@@ -440,9 +533,11 @@ export class MatchClient {
       this.hooks.onPair({ stream: s, peer, close: this.callCloser, demo: false, chat });
     });
     call.on("close", () => {
+      clearWd();
       if (this.call === call && this.paired) {
         this.call = null;
         this.paired = false;
+        this.hooks.onIce?.("");
         this.hooks.onPeerLeft();
       } else if (this.searching) {
         // дзвінок відпав до медіа → шукаємо знову
