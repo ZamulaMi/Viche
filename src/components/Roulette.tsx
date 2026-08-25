@@ -13,6 +13,7 @@ type Phase = "idle" | "captcha" | "searching" | "live";
 type Props = {
   localMedia: LocalMedia | null;
   ensureLocal: () => Promise<LocalMedia>;
+  releaseMedia: () => void;
   onToast: (msg: string, kind?: "ok" | "warn") => void;
 };
 
@@ -21,7 +22,7 @@ const fmtElapsed = (s: number) =>
 
 const LANG_OPTS: Array<LangCode | "any"> = ["any", ...LANGS];
 
-export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
+export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToast }: Props) {
   const { t } = useI18n();
   const [phase, setPhase] = useState<Phase>("idle");
   const [filters, setFilters] = useState<RouletteFilters>({ gender: "any", lang: "any", tags: [] });
@@ -146,6 +147,8 @@ export default function Roulette({ localMedia, ensureLocal, onToast }: Props) {
     setOrient("land");
     setIce("");
     setPhase("idle");
+    // після завершення розмови камера/мікрофон вимикаються повністю
+    releaseMedia();
   };
 
   const next = () => {

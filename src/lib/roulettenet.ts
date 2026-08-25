@@ -35,8 +35,8 @@ export type RouletteHooks = {
 };
 
 type Wire =
-  | { t: "knock"; f: RouletteFilters }
-  | { t: "accept" }
+  | { t: "knock"; f: RouletteFilters; u: string }
+  | { t: "accept"; u: string }
   | { t: "busy" }
   | { t: "chello" }
   | { t: "chat"; text: string }
@@ -46,6 +46,21 @@ const PREFIX = "viche-v2-q-";
 const N_SLOTS = 24;
 const PROBE_EVERY = 1200; // як часто стукаємо до нового слоту
 const KNOCK_TIMEOUT = 3200; // скільки чекаємо на accept
+
+/* Стабільний відбиток браузера: захищає від самоз'єднання, коли
+   відкрито дві вкладки або сторінку перезавантажено під час пошуку. */
+function browserUid(): string {
+  try {
+    let id = localStorage.getItem("viche:uid");
+    if (!id) {
+      id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+      localStorage.setItem("viche:uid", id);
+    }
+    return id;
+  } catch {
+    return Math.random().toString(36).slice(2, 10);
+  }
+}
 
 /* Симетрична перевірка сумісності фільтрів:
    достатньо однієї сторони, бо функція симетрична. */
@@ -59,6 +74,7 @@ function compatible(a: RouletteFilters, b: RouletteFilters): boolean {
 export class RouletteNet {
   private peer: Peer | null = null;
   private mySlot = -1;
+  private uid = browserUid();
   private myFilters: RouletteFilters = { gender: "any", lang: "any", tags: [] };
 
   private partner: string | null = null;
@@ -243,7 +259,8 @@ export class RouletteNet {
       const m = raw as Wire;
       if (!m?.t) return;
       if (m.t === "knock") {
-        if (this.paired || !compatible(this.myFilters, m.f)) {
+        // свій браузер (друга вкладка / перезавантаження) → busy, не паруємось
+        if (this.paired || m.u === this.uid || !compatible(this.myFilters, m.f)) {
           try {
             conn.send({ t: "busy" } satisfies Wire);
           } catch {
@@ -259,7 +276,7 @@ export class RouletteNet {
         } else {
           this.finishPair(conn.peer);
           try {
-            conn.send({ t: "accept" } satisfies Wire);
+            conn.send({ t: "accept", u: this.uid } satisfies Wire);
           } catch {
             /* noop */
           }
@@ -313,8 +330,8 @@ export class RouletteNet {
     if (!this.searching || this.paired || this.disposed || !this.peer) return;
     const idx = this.probeIdx % N_SLOTS;
     this.probeIdx++;
-    if (idx === this.mySlot) return; // не стукаємо до себе
     const target = this.slotId(idx);
+    if (idx === this.mySlot || target === this.peer.id) return; // не стукаємо до себе
     const conn = this.peer.connect(target, { reliable: true });
     let done = false;
     const finish = () => {
@@ -334,7 +351,7 @@ export class RouletteNet {
         return;
       }
       try {
-        conn.send({ t: "knock", f: this.myFilters } satisfies Wire);
+        conn.send({ t: "knock", f: this.myFilters, u: this.uid } satisfies Wire);
       } catch {
         finish();
       }
@@ -343,7 +360,8 @@ export class RouletteNet {
       const m = raw as Wire;
       if (done) return;
       if (m?.t === "accept") {
-        if (this.paired) {
+        // відгукнувся наш власний браузер (примарний слот) → відхиляємо
+        if (this.paired || m.u === this.uid) {
           finish();
           return;
         }

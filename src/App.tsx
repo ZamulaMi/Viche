@@ -117,6 +117,22 @@ function Shell() {
     return m;
   }, []);
 
+  /* Повне вимкнення камери/мікрофона після завершення розмови:
+     зупиняємо всі треки (зелений індикатор у браузері гасне) і
+     скидаємо кеш — наступний старт запитає доступ заново. */
+  const releaseMedia = useCallback(() => {
+    if (localPromise.current) {
+      localPromise.current
+        .then((m) => m.stream.getTracks().forEach((tr) => tr.stop()))
+        .catch(() => {});
+      localPromise.current = null;
+    }
+    setLocalMedia((prev) => {
+      prev?.stream.getTracks().forEach((tr) => tr.stop());
+      return null;
+    });
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
@@ -229,10 +245,10 @@ function Shell() {
           {/* ── Контент ── */}
           <main className="flex-1 min-w-0 py-6 pb-28 lg:pb-10">
             <div className={view === "roulette" ? "block" : "hidden"}>
-              <Roulette localMedia={localMedia} ensureLocal={ensureLocal} onToast={push} />
+              <Roulette localMedia={localMedia} ensureLocal={ensureLocal} releaseMedia={releaseMedia} onToast={push} />
             </div>
             <div className={view === "rooms" ? "block" : "hidden"}>
-              <Rooms localMedia={localMedia} ensureLocal={ensureLocal} onToast={push} initialJoin={initialJoin} />
+              <Rooms localMedia={localMedia} ensureLocal={ensureLocal} releaseMedia={releaseMedia} onToast={push} initialJoin={initialJoin} />
             </div>
           </main>
         </div>

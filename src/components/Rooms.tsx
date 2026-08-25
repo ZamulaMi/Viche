@@ -42,6 +42,7 @@ type StoredRoom = { number: string; code: string; ts: number };
 type Props = {
   localMedia: LocalMedia | null;
   ensureLocal: () => Promise<LocalMedia>;
+  releaseMedia: () => void;
   onToast: (msg: string, kind?: "ok" | "warn") => void;
   initialJoin: RoomId | null;
 };
@@ -128,7 +129,7 @@ function Tile({
   );
 }
 
-export default function Rooms({ localMedia, ensureLocal, onToast, initialJoin }: Props) {
+export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, initialJoin }: Props) {
   const { t } = useI18n();
   const titleWord = useScramble(t("room.title"), 120);
 
@@ -213,7 +214,9 @@ export default function Rooms({ localMedia, ensureLocal, onToast, initialJoin }:
     setStreams({});
     setMsgs([]);
     setSearching(false);
-  }, []);
+    // після виходу з кімнати камера/мікрофон вимикаються повністю
+    releaseMedia();
+  }, [releaseMedia]);
 
   const openRoom = useCallback(
     async (r: RoomId, asCreator: boolean) => {

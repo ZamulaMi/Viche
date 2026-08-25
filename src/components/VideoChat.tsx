@@ -59,7 +59,6 @@ export default function VideoChat({
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
   const [speaking, setSpeaking] = useState(false);
-  const [burst, setBurst] = useState(true);
   const [cool, setCool] = useState(false);
 
   const peerLang = peer.langs.includes("uk") ? "uk" : "en";
@@ -87,15 +86,12 @@ export default function VideoChat({
     }
   }, [localMedia]);
 
-  /* статичний "сплеск" при зміні співрозмовника */
+  /* скидання чату при зміні співрозмовника */
   useEffect(() => {
-    setBurst(true);
-    const to = window.setTimeout(() => setBurst(false), 520);
     setMsgs([]);
     setUnread(0);
     const sys = window.setTimeout(() => push("sys", t("chat.sysJoin")), 400);
     return () => {
-      window.clearTimeout(to);
       window.clearTimeout(sys);
     };
   }, [peer.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -237,7 +233,7 @@ export default function VideoChat({
 
   return (
     <div ref={boxRef} className="absolute inset-0 overflow-hidden bg-black">
-      {/* remote: без обрізки — contain; орієнтація визначає формат сцени */}
+      {/* remote: чисте відео без обрізки й без жодних ефектів */}
       <video
         ref={remoteRef}
         autoPlay
@@ -250,9 +246,6 @@ export default function VideoChat({
         }}
         className="absolute inset-0 w-full h-full object-contain bg-black"
       />
-      <div className="absolute inset-0 scanlines pointer-events-none" />
-      <div className="absolute inset-0 pointer-events-none vignette" />
-      {burst && <div className="absolute inset-0 staticburst opacity-60 pointer-events-none z-10" />}
 
       {/* верхня панель: статус + пір */}
       <div className="absolute top-3 left-3 right-3 flex items-start justify-between gap-3 z-20">
@@ -296,7 +289,7 @@ export default function VideoChat({
       {/* локальне відео (PiP) */}
       <div className="absolute right-3 bottom-[92px] sm:bottom-24 w-28 sm:w-44 aspect-[4/3] rounded-lg overflow-hidden border border-[var(--c-line2)] shadow-[var(--c-shadow)] z-20 bg-[var(--c-bg2)]">
         {localMedia?.isReal ? (
-          <video ref={localRef} autoPlay playsInline muted className="w-full h-full object-contain -scale-x-100 bg-[var(--c-bg2)]" />
+          <video ref={localRef} autoPlay playsInline muted className="w-full h-full object-contain bg-[var(--c-bg2)]" />
         ) : (
           <div className="w-full h-full grid place-items-center">
             <span className="font-display text-2xl text-[var(--c-amber)]">TI</span>
