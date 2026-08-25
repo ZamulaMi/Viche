@@ -58,7 +58,7 @@ export function makePeer(partial?: Partial<Peer>): Peer {
     const tg = pick(TAGS);
     if (!tags.includes(tg)) tags.push(tg);
   }
-  return {
+  const base: Peer = {
     id: shortId(6),
     name: "Гість_" + shortId(4),
     gender,
@@ -66,7 +66,13 @@ export function makePeer(partial?: Partial<Peer>): Peer {
     tags,
     hue: ri(80, 200),
     ping: ri(18, 74),
+  };
+  // undefined у partial не повинен затирати згенеровані масиви
+  return {
+    ...base,
     ...partial,
+    tags: partial?.tags ?? base.tags,
+    langs: partial?.langs ?? base.langs,
   };
 }
 

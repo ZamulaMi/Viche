@@ -283,7 +283,7 @@ export default function VideoChat({
                 #{peer.id} · webrtc
               </span>
             ) : (
-              peer.tags.slice(0, 3).map((tg) => (
+              (peer.tags ?? []).slice(0, 3).map((tg) => (
                 <span key={tg} className="font-mono text-[10px] px-2 py-0.5 rounded-md bg-[color-mix(in_srgb,var(--c-bg)_72%,transparent)] backdrop-blur-md border border-[var(--c-line)] text-[var(--c-dim)]">
                   #{tg}
                 </span>
