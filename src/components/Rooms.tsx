@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RoomNet, type Member, type RoomStatus } from "../lib/roomnet";
 import { RouletteNet } from "../lib/roulettenet";
-import { StreamRelay } from "../lib/relay";
+import { RoomStreamCompositor, StreamRelay, type RoomSource } from "../lib/relay";
 import {
   filterProfanity,
   makeRoomId,
@@ -59,16 +59,21 @@ let mid = 0;
 const RECENT_KEY = "viche:rooms";
 const NAME_KEY = "viche:name";
 
+/* Зберігається ВИКЛЮЧНО остання кімната */
 const loadRecent = (): StoredRoom[] => {
   try {
-    return JSON.parse(localStorage.getItem(RECENT_KEY) || "[]") as StoredRoom[];
+    const raw = localStorage.getItem(RECENT_KEY);
+    if (!raw) return [];
+    const list = JSON.parse(raw) as StoredRoom[];
+    return Array.isArray(list) ? list.slice(0, 1) : [];
   } catch {
     return [];
   }
 };
+
 const saveRecent = (r: RoomId) => {
   try {
-    const list = [{ number: r.number, code: r.code, ts: Date.now() }, ...loadRecent().filter((x) => x.number !== r.number)].slice(0, 6);
+    const list: StoredRoom[] = [{ number: r.number, code: r.code, ts: Date.now() }];
     localStorage.setItem(RECENT_KEY, JSON.stringify(list));
   } catch {
     /* noop */
@@ -219,6 +224,53 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   const [selfStream, setSelfStream] = useState<MediaStream | null>(localMedia?.stream ?? null);
   const [switchingCam, setSwitchingCam] = useState(false);
   const roomBoxRef = useRef<HTMLDivElement>(null);
+  const compositorRef = useRef<RoomStreamCompositor | null>(null);
+  const netRef = useRef<RoomNet | null>(null);
+  const creatorRef = useRef(false);
+  const aliveRef = useRef(true);
+  const prevRoster = useRef<Member[]>([]);
+  const listRef = useRef<HTMLDivElement>(null);
+  const joinedOnce = useRef(false);
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
+
+  // Джерела відео та аудіо кімнати для компонування гостю з рулетки (1 або 2 людини)
+  const currentSources = useMemo<RoomSource[]>(() => {
+    const list: RoomSource[] = [];
+    const myId = netRef.current?.myId || "";
+    const myStream = selfStream || localMedia?.stream;
+    if (myStream) {
+      list.push({
+        id: myId || "host",
+        name: name.trim() || t("room.you"),
+        stream: myStream,
+        isSelf: true,
+        facingMode,
+      });
+    }
+    // Додаємо інших регулярних учасників кімнати (до 2 осіб у композиції)
+    for (const m of roster) {
+      if (m.id !== myId && streams[m.id]) {
+        list.push({
+          id: m.id,
+          name: m.name,
+          stream: streams[m.id],
+          isSelf: false,
+          facingMode: "user",
+        });
+      }
+    }
+    return list.slice(0, 2);
+  }, [roster, streams, selfStream, localMedia, facingMode, name, t]);
+
+  // Оновлюємо композитор у реальному часі при зміні учасників або потоків
+  useEffect(() => {
+    if (compositorRef.current) {
+      compositorRef.current.updateSources(currentSources);
+    }
+  }, [currentSources]);
 
   const toggleMic = () => {
     setMicOn((v) => {
@@ -252,17 +304,6 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
       setSwitchingCam(false);
     }
   };
-
-  const netRef = useRef<RoomNet | null>(null);
-  const creatorRef = useRef(false);
-  const aliveRef = useRef(true);
-  const prevRoster = useRef<Member[]>([]);
-  const listRef = useRef<HTMLDivElement>(null);
-  const joinedOnce = useRef(false);
-  const tRef = useRef(t);
-  useEffect(() => {
-    tRef.current = t;
-  }, [t]);
 
   /* відстеження повноекранного режиму */
   useEffect(() => {
@@ -344,6 +385,8 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
       h.relay?.dispose();
       h.net.dispose();
     });
+    compositorRef.current?.dispose();
+    compositorRef.current = null;
     setHunters([]);
     setScreen("home");
     setRoom(null);
@@ -515,6 +558,11 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
       cancelHunt();
       return;
     }
+    // Випадкового користувача з рулетки можна підключити ТІЛЬКИ якщо кімната на 2 або 3 людей
+    if (seats > 3) {
+      onToast(t("room.noRandomForLargeRooms"), "warn");
+      return;
+    }
     if (roster.length + hunters.length >= seats) {
       onToast(`${t("room.seats")}: ${seats}`, "warn");
       return;
@@ -522,7 +570,16 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
     const lm = await ensureLocal();
     if (!aliveRef.current) return;
     setSearching(true);
-    const hunter = new RouletteNet(lm.stream, {
+
+    // Ініціалізуємо або оновлюємо композитор кімнати (потоки 1 або 2 людей)
+    if (!compositorRef.current) {
+      compositorRef.current = new RoomStreamCompositor(currentSources);
+    } else {
+      compositorRef.current.updateSources(currentSources);
+    }
+    const outboundStream = compositorRef.current.compositeStream;
+
+    const hunter = new RouletteNet(outboundStream, {
       onState: () => {},
       onSlot: () => {},
       onPair: (stream, peerId) => {
@@ -562,7 +619,14 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
           gone.relay?.dispose();
           netRef.current?.stopShareAuxStream(gone.id);
         }
-        setHunters((hs) => hs.filter((h) => h.net !== hunter));
+        setHunters((hs) => {
+          const next = hs.filter((h) => h.net !== hunter);
+          if (next.length === 0) {
+            compositorRef.current?.dispose();
+            compositorRef.current = null;
+          }
+          return next;
+        });
         hunter.dispose();
         push("sys", t("room.guestLeft"));
       },
@@ -579,7 +643,14 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
     h.net.dispose();
     netRef.current?.stopShareAuxStream(id); // прибираємо з екранів усіх учасників
     push("sys", `${h.name} ${t("room.guestLeft")}`);
-    setHunters((hs) => hs.filter((x) => x.id !== id));
+    setHunters((hs) => {
+      const next = hs.filter((x) => x.id !== id);
+      if (next.length === 0) {
+        compositorRef.current?.dispose();
+        compositorRef.current = null;
+      }
+      return next;
+    });
   };
 
   const replaceHunter = async (id: string) => {
@@ -683,9 +754,9 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
         </div>
 
         <div className="grid lg:grid-cols-[minmax(0,1fr)_330px] gap-4 items-start">
-          {/* ── Сітка учасників ── */}
+          {/* ── Сітка учасників (якщо 2 учасники — екран ділиться навпіл 50/50) ── */}
           <div className="min-w-0">
-            <div className={`grid gap-3 ${filled === 1 ? "grid-cols-1 max-w-xl" : "sm:grid-cols-2"}`}>
+            <div className={`grid gap-3 ${filled === 1 ? "grid-cols-1 max-w-xl mx-auto" : filled === 2 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1 sm:grid-cols-2"}`}>
               {/* реальні учасники (mesh P2P) */}
               {roster.map((m) => {
                 const self = netRef.current?.myId === m.id;
@@ -750,10 +821,18 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
             </div>
 
             {isHost && (
-              <button className="btn mt-4" onClick={() => void addRandom()} disabled={searching || filled >= seats}>
-                <IconPlus className="w-4 h-4" />
-                {searching ? t("room.searching") : t("room.addRandom")}
-              </button>
+              seats <= 3 ? (
+                <button className="btn mt-4" onClick={() => void addRandom()} disabled={searching || filled >= seats}>
+                  <IconPlus className="w-4 h-4" />
+                  {searching ? t("room.searching") : t("room.addRandom")}
+                </button>
+              ) : (
+                <div className="mt-4 p-3 rounded-xl border border-[var(--c-line)] bg-[var(--c-bg2)] flex items-center gap-2">
+                  <span className="font-mono text-[11px] text-[var(--c-faint)]">
+                    ℹ {t("room.noRandomForLargeRooms")}
+                  </span>
+                </div>
+              )
             )}
           </div>
 
@@ -847,7 +926,14 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
           </div>
           <label className="block text-[11px] text-[var(--c-faint)] mb-1.5">{t("room.name")}</label>
           <input className="input mb-4" placeholder={t("room.namePh")} value={name} onChange={(e) => setName(e.target.value.slice(0, 24))} />
-          <p className="text-[11px] text-[var(--c-faint)] mb-1.5">{t("room.seats")}</p>
+          <div className="flex items-center justify-between mb-1.5">
+            <p className="text-[11px] text-[var(--c-faint)]">{t("room.seats")}</p>
+            {seats <= 3 ? (
+              <span className="font-mono text-[10px] text-[var(--c-mint)]">✓ {t("room.seatsLimitHint")}</span>
+            ) : (
+              <span className="font-mono text-[10px] text-[var(--c-faint)]">{t("room.noRandomForLargeRooms")}</span>
+            )}
+          </div>
           <div className="flex gap-2 mb-5">
             {[2, 3, 4, 6, 8].map((s) => (
               <button key={s} className={`chip !px-4 font-mono ${seats === s ? "chip-on" : ""}`} onClick={() => setSeats(s)}>

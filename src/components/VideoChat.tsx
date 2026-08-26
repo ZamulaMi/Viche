@@ -328,7 +328,7 @@ export default function VideoChat({
           : "absolute inset-0 bg-black overflow-visible"
       }`}
     >
-      {/* remote: чисте відео без обрізки й без жодних спотворень */}
+      {/* remote: відео займає максимальну доступну площу */}
       <video
         ref={remoteRef}
         autoPlay
@@ -339,7 +339,7 @@ export default function VideoChat({
             onOrient?.(v.videoWidth < v.videoHeight ? "port" : "land");
           }
         }}
-        className="absolute inset-0 w-full h-full object-contain bg-black"
+        className="absolute inset-0 w-full h-full object-cover bg-black"
       />
 
       {/* верхня панель: статус + пір */}

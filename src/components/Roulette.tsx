@@ -193,7 +193,11 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
         {/* ── Сцена: карточка сцени .card ── */}
         <div className="card overflow-hidden relative w-full">
           <div
-            className="relative bg-[var(--c-bg2)] transition-all duration-300 aspect-[4/3] max-h-[min(48dvh,500px)] sm:max-h-[min(66dvh,640px)] min-h-[230px] w-full mx-auto overflow-hidden"
+            className={`relative bg-[var(--c-bg2)] transition-all duration-300 w-full mx-auto overflow-hidden ${
+              phase === "live"
+                ? "aspect-[16/10] sm:aspect-[16/9] max-h-[min(76dvh,780px)] min-h-[300px] sm:min-h-[440px]"
+                : "aspect-[4/3] max-h-[min(48dvh,500px)] sm:max-h-[min(66dvh,640px)] min-h-[230px]"
+            }`}
           >
             {phase === "live" && peer ? (
               <VideoChat
