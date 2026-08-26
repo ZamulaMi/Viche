@@ -306,24 +306,32 @@ export class RoomNet {
     const list = this.auxCalls.get(auxId) ?? [];
     this.auxCalls.set(auxId, [...list, call]);
 
-    let emitted = false;
-    const handleStream = (s: MediaStream) => {
-      if (emitted) return;
-      emitted = true;
-      this.hooks.onAuxStream?.(auxId, auxName, s);
+    let combinedStream: MediaStream | null = null;
+    const handleTrackOrStream = (s?: MediaStream, track?: MediaStreamTrack) => {
+      if (s) {
+        combinedStream = s;
+      } else if (track) {
+        if (!combinedStream) combinedStream = new MediaStream();
+        if (!combinedStream.getTracks().includes(track)) {
+          combinedStream.addTrack(track);
+        }
+      }
+      if (combinedStream && combinedStream.getTracks().length > 0) {
+        this.hooks.onAuxStream?.(auxId, auxName, combinedStream);
+      }
     };
 
     call.on("stream", (s) => {
-      handleStream(s);
+      handleTrackOrStream(s);
     });
 
     const pc = call.peerConnection;
     if (pc) {
       pc.ontrack = (e) => {
         if (e.streams && e.streams[0]) {
-          handleStream(e.streams[0]);
+          handleTrackOrStream(e.streams[0]);
         } else if (e.track) {
-          handleStream(new MediaStream([e.track]));
+          handleTrackOrStream(undefined, e.track);
         }
       };
       try {
@@ -340,7 +348,6 @@ export class RoomNet {
     call.on("close", () => {
       const arr = this.auxCalls.get(auxId) ?? [];
       this.auxCalls.set(auxId, arr.filter((c) => c !== call));
-      if ((this.auxCalls.get(auxId) ?? []).length === 0) this.hooks.onAuxGone?.(auxId);
     });
     call.on("error", () => {
       /* noop */

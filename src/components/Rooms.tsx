@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RoomNet, type Member, type RoomStatus } from "../lib/roomnet";
 import { RouletteNet } from "../lib/roulettenet";
+import { StreamRelay } from "../lib/relay";
 import {
   filterProfanity,
   makeRoomId,
@@ -28,7 +29,7 @@ import {
 
 /* Випадковий гість — РЕАЛЬНА людина, знайдена мисливцем у глобальному
    пулі рулетки (RouletteNet). Жодних ботів. */
-type Hunter = { id: string; name: string; stream: MediaStream; net: RouletteNet };
+type Hunter = { id: string; name: string; stream: MediaStream; net: RouletteNet; relay?: StreamRelay };
 type ChatMsg = {
   id: number;
   kind: "sys" | "msg";
@@ -94,11 +95,15 @@ function Tile({
     const v = ref.current;
     if (!v) return;
     v.srcObject = stream;
-    v.onloadedmetadata = () => {
-      setPort(v.videoWidth > 0 && v.videoHeight > 0 && v.videoWidth < v.videoHeight);
+    const play = () => {
       v.play().catch(() => {});
     };
-    v.play().catch(() => {});
+    v.onloadedmetadata = () => {
+      setPort(v.videoWidth > 0 && v.videoHeight > 0 && v.videoWidth < v.videoHeight);
+      play();
+    };
+    v.oncanplay = play;
+    play();
   }, [stream]);
   const tone =
     badgeTone === "mint"
@@ -212,7 +217,10 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   const leaveRoom = useCallback(() => {
     netRef.current?.leave();
     netRef.current = null;
-    huntersRef.current.forEach((h) => h.net.dispose());
+    huntersRef.current.forEach((h) => {
+      h.relay?.dispose();
+      h.net.dispose();
+    });
     setHunters([]);
     setScreen("home");
     setRoom(null);
@@ -392,24 +400,38 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
         pendingHunter.current = null;
         const tail = peerId.replace(/[^0-9]/g, "") || peerId.slice(-3);
         const name = "Гість_" + tail;
+
+        // Створюємо або оновлюємо чистий ретрансляційний потік
+        const prevH = huntersRef.current.find((h) => h.id === peerId || h.net === hunter);
+        let relayInstance: StreamRelay;
+        if (prevH?.relay) {
+          prevH.relay.updateSource(stream);
+          relayInstance = prevH.relay;
+        } else {
+          relayInstance = new StreamRelay(stream);
+        }
+
         // upsert: подія "stream" може повторитись (ICE restart) — не
         // додаємо дублікат, а оновлюємо потік того самого гостя
         setHunters((hs) => {
           const exists = hs.some((h) => h.net === hunter || h.id === peerId);
           if (exists) {
-            return hs.map((h) => (h.net === hunter || h.id === peerId ? { ...h, stream } : h));
+            return hs.map((h) => (h.net === hunter || h.id === peerId ? { ...h, stream, relay: relayInstance } : h));
           }
-          return [...hs, { id: peerId, name, stream, net: hunter }];
+          return [...hs, { id: peerId, name, stream, net: hunter, relay: relayInstance }];
         });
-        // головне: хост ретранслює відео випадкового гостя ВСІМ учасникам
-        netRef.current?.shareAuxStream(peerId, name, stream);
+        // головне: хост ретранслює стабільний локальний потік випадкового гостя ВСІМ учасникам
+        netRef.current?.shareAuxStream(peerId, name, relayInstance.relayedStream);
         push("sys", `${name} ${t("room.guestJoined")} · ${t("room.randomBadge")}`);
         setSearching(false);
       },
       onPeerLeft: () => {
         if (!aliveRef.current) return;
         const gone = huntersRef.current.find((h) => h.net === hunter);
-        if (gone) netRef.current?.stopShareAuxStream(gone.id);
+        if (gone) {
+          gone.relay?.dispose();
+          netRef.current?.stopShareAuxStream(gone.id);
+        }
         setHunters((hs) => hs.filter((h) => h.net !== hunter));
         hunter.dispose();
         push("sys", t("room.guestLeft"));
@@ -423,6 +445,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   const kickHunter = (id: string) => {
     const h = huntersRef.current.find((x) => x.id === id);
     if (!h) return;
+    h.relay?.dispose();
     h.net.dispose();
     netRef.current?.stopShareAuxStream(id); // прибираємо з екранів усіх учасників
     push("sys", `${h.name} ${t("room.guestLeft")}`);
