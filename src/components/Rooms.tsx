@@ -80,7 +80,7 @@ const saveRecent = (r: RoomId) => {
   }
 };
 
-/* ── Плитка відео: 4:3 для горизонтального, 3:4 для вертикального, без обрізки ── */
+/* ── Плитка відео: 4:3 для горизонтального, 3:4 для вертикального, без обрізки (або fillHeight для повноекранного режиму 2 людей) ── */
 function Tile({
   stream,
   name,
@@ -95,6 +95,7 @@ function Tile({
   switchCamLabel,
   onKick,
   kickLabel,
+  fillHeight,
 }: {
   stream: MediaStream;
   name: string;
@@ -110,6 +111,7 @@ function Tile({
   switchCamLabel?: string;
   onKick?: () => void;
   kickLabel?: string;
+  fillHeight?: boolean;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [port, setPort] = useState(false);
@@ -134,17 +136,27 @@ function Tile({
         ? "text-[var(--c-amber)] border-[color-mix(in_srgb,var(--c-amber)_45%,transparent)]"
         : "text-[var(--c-faint)] border-[var(--c-line2)]";
   return (
-    <div className={`group relative w-full ${port ? "aspect-[3/4] max-w-[300px] mx-auto" : "aspect-[4/3]"} rounded-xl overflow-hidden border border-[var(--c-line)] bg-black`}>
+    <div
+      className={`group relative w-full ${
+        fillHeight
+          ? "h-full min-h-0 flex-1"
+          : port
+          ? "aspect-[3/4] max-w-[300px] mx-auto"
+          : "aspect-[4/3]"
+      } rounded-xl overflow-hidden border border-[var(--c-line)] bg-black`}
+    >
       <video
         ref={ref}
         autoPlay
         playsInline
         muted={muted}
-        className={`absolute inset-0 w-full h-full object-contain transition-transform duration-300 ${
+        className={`absolute inset-0 w-full h-full ${
+          fillHeight ? "object-cover" : "object-contain"
+        } transition-transform duration-300 ${
           isSelf && facingMode !== "environment" ? "-scale-x-100" : "scale-x-100"
         }`}
       />
-      <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 px-3 py-2 bg-gradient-to-t from-black/75 to-transparent z-10">
+      <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 px-3 py-2 bg-gradient-to-t from-black/75 to-transparent z-10 pointer-events-none">
         <span className="text-[13px] font-700 text-white truncate">{name}</span>
         {muted && <IconMicOff className="w-3.5 h-3.5 text-white/70 flex-none" />}
       </div>
@@ -218,6 +230,26 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   const [draft, setDraft] = useState("");
   const [recents, setRecents] = useState<StoredRoom[]>(loadRecent);
   const [isFull, setIsFull] = useState(false);
+  const [isPortrait, setIsPortrait] = useState(() =>
+    typeof window !== "undefined" ? window.innerHeight > window.innerWidth : false
+  );
+
+  useEffect(() => {
+    const updateOrient = () => {
+      setIsPortrait(window.innerHeight > window.innerWidth);
+    };
+    updateOrient();
+    window.addEventListener("resize", updateOrient);
+    window.addEventListener("orientationchange", updateOrient);
+    const mq = window.matchMedia?.("(orientation: portrait)");
+    mq?.addEventListener?.("change", updateOrient);
+    return () => {
+      window.removeEventListener("resize", updateOrient);
+      window.removeEventListener("orientationchange", updateOrient);
+      mq?.removeEventListener?.("change", updateOrient);
+    };
+  }, []);
+
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
   const [facingMode, setFacingMode] = useState<FacingMode>(localMedia?.facingMode ?? "user");
@@ -753,72 +785,95 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
           </div>
         </div>
 
-        <div className="grid lg:grid-cols-[minmax(0,1fr)_330px] gap-4 items-start">
-          {/* ── Сітка учасників (якщо 2 учасники — екран ділиться навпіл 50/50) ── */}
-          <div className="min-w-0">
-            <div className={`grid gap-3 ${filled === 1 ? "grid-cols-1 max-w-xl mx-auto" : filled === 2 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1 sm:grid-cols-2"}`}>
-              {/* реальні учасники (mesh P2P) */}
-              {roster.map((m) => {
-                const self = netRef.current?.myId === m.id;
-                const st = self ? (selfStream || localMedia?.stream) : streams[m.id];
-                return st ? (
-                  <Tile
-                    key={m.id}
-                    stream={st}
-                    name={self ? `${m.name} · ${t("room.you")}` : m.name}
-                    badge={self ? t("room.you") : m.id === netRef.current?.hostId ? t("room.admin") : "p2p"}
-                    badgeTone={self ? "amber" : "mint"}
-                    muted={self}
-                    isSelf={self}
-                    facingMode={self ? facingMode : "user"}
-                    onSwitchCam={self && localMedia?.hasCam ? handleSwitchCam : undefined}
-                    switchingCam={switchingCam}
-                    switchCamLabel={t("video.switchCam")}
-                    onKick={isHost && !self ? () => netRef.current?.kick(m.id) : undefined}
-                    kickLabel={t("room.kick")}
-                  />
-                ) : (
-                  <div key={m.id} className="aspect-[4/3] rounded-xl border border-dashed border-[var(--c-line2)] grid place-items-center bg-[var(--c-bg2)]">
-                    <p className="font-mono text-[11px] text-[var(--c-faint)] caret">{m.name} · p2p…</p>
-                  </div>
-                );
-              })}
-              {/* випадкові гості — реальні люди з пулу рулетки */}
-              {hunters.map((g) => (
-                <div key={g.id} className="relative">
-                  <Tile
-                    stream={g.stream}
-                    name={g.name}
-                    badge={t("room.randomBadge")}
-                    badgeTone="mint"
-                    onKick={isHost ? () => kickHunter(g.id) : undefined}
-                    kickLabel={t("room.kick")}
-                  />
-                  {isHost && (
-                    <button
-                      className="absolute -bottom-2.5 right-3 chip !text-[11px] !py-1 shadow-[var(--c-shadow)]"
-                      onClick={() => void replaceHunter(g.id)}
-                    >
-                      <IconUserPlus className="w-3.5 h-3.5" />
-                      {t("room.replace")}
-                    </button>
-                  )}
+        <div className={`grid ${isFull ? "lg:grid-cols-[minmax(0,1fr)_300px] flex-1 min-h-0" : "lg:grid-cols-[minmax(0,1fr)_330px]"} gap-4 items-start`}>
+          {/* ── Сітка учасників (якщо 2 учасники в повноекранному режимі: вертикально — зверху/знизу, горизонтально — справа/зліва) ── */}
+          <div className="min-w-0 flex-1 h-full flex flex-col">
+            {(() => {
+              const totalTiles = roster.length + hunters.length + Object.keys(auxStreams).length;
+              const isTwoPeople = totalTiles === 2 || filled === 2;
+              const isTwoInFull = isFull && isTwoPeople;
+
+              return (
+                <div
+                  className={`grid gap-2.5 sm:gap-3 ${
+                    isTwoInFull
+                      ? isPortrait
+                        ? "grid-cols-1 grid-rows-2 h-[calc(100dvh-130px)] sm:h-[calc(100dvh-150px)] max-h-full portrait:grid-cols-1 portrait:grid-rows-2 landscape:grid-cols-2 landscape:grid-rows-1"
+                        : "grid-cols-2 grid-rows-1 h-[calc(100dvh-130px)] sm:h-[calc(100dvh-150px)] max-h-full portrait:grid-cols-1 portrait:grid-rows-2 landscape:grid-cols-2 landscape:grid-rows-1"
+                      : isFull
+                      ? "grid-cols-1 sm:grid-cols-2"
+                      : filled === 1
+                      ? "grid-cols-1 max-w-xl mx-auto"
+                      : "grid-cols-1 sm:grid-cols-2"
+                  }`}
+                >
+                  {/* реальні учасники (mesh P2P) */}
+                  {roster.map((m) => {
+                    const self = netRef.current?.myId === m.id;
+                    const st = self ? (selfStream || localMedia?.stream) : streams[m.id];
+                    return st ? (
+                      <Tile
+                        key={m.id}
+                        stream={st}
+                        name={self ? `${m.name} · ${t("room.you")}` : m.name}
+                        badge={self ? t("room.you") : m.id === netRef.current?.hostId ? t("room.admin") : "p2p"}
+                        badgeTone={self ? "amber" : "mint"}
+                        muted={self}
+                        isSelf={self}
+                        facingMode={self ? facingMode : "user"}
+                        onSwitchCam={self && localMedia?.hasCam ? handleSwitchCam : undefined}
+                        switchingCam={switchingCam}
+                        switchCamLabel={t("video.switchCam")}
+                        onKick={isHost && !self ? () => netRef.current?.kick(m.id) : undefined}
+                        kickLabel={t("room.kick")}
+                        fillHeight={isTwoInFull}
+                      />
+                    ) : (
+                      <div key={m.id} className="aspect-[4/3] rounded-xl border border-dashed border-[var(--c-line2)] grid place-items-center bg-[var(--c-bg2)]">
+                        <p className="font-mono text-[11px] text-[var(--c-faint)] caret">{m.name} · p2p…</p>
+                      </div>
+                    );
+                  })}
+                  {/* випадкові гості — реальні люди з пулу рулетки */}
+                  {hunters.map((g) => (
+                    <div key={g.id} className={`relative ${isTwoInFull ? "h-full min-h-0 flex-1" : ""}`}>
+                      <Tile
+                        stream={g.stream}
+                        name={g.name}
+                        badge={t("room.randomBadge")}
+                        badgeTone="mint"
+                        onKick={isHost ? () => kickHunter(g.id) : undefined}
+                        kickLabel={t("room.kick")}
+                        fillHeight={isTwoInFull}
+                      />
+                      {isHost && (
+                        <button
+                          className="absolute -bottom-2.5 right-3 chip !text-[11px] !py-1 shadow-[var(--c-shadow)] z-20"
+                          onClick={() => void replaceHunter(g.id)}
+                        >
+                          <IconUserPlus className="w-3.5 h-3.5" />
+                          {t("room.replace")}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  {/* випадкові гості, ретрансльовані хостом — їх бачать усі
+                      учасники (не лише адміністратор); у хоста цей список
+                      порожній, бо він бачить їх через `hunters` */}
+                  {Object.entries(auxStreams).map(([auxId, a]) => (
+                    <Tile
+                      key={"aux-" + auxId}
+                      stream={a.stream}
+                      name={a.name}
+                      badge={t("room.randomBadge")}
+                      badgeTone="mint"
+                      live
+                      fillHeight={isTwoInFull}
+                    />
+                  ))}
                 </div>
-              ))}
-              {/* випадкові гості, ретрансльовані хостом — їх бачать усі
-                  учасники (не лише адміністратор); у хоста цей список
-                  порожній, бо він бачить їх через `hunters` */}
-              {Object.entries(auxStreams).map(([auxId, a]) => (
-                <Tile
-                  key={"aux-" + auxId}
-                  stream={a.stream}
-                  name={a.name}
-                  badge={t("room.randomBadge")}
-                  badgeTone="mint"
-                  live
-                />
-              ))}
-            </div>
+              );
+            })()}
 
             {isHost && (
               seats <= 3 ? (
@@ -827,9 +882,10 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
                   {searching ? t("room.searching") : t("room.addRandom")}
                 </button>
               ) : (
-                <div className="mt-4 p-3 rounded-xl border border-[var(--c-line)] bg-[var(--c-bg2)] flex items-center gap-2">
-                  <span className="font-mono text-[11px] text-[var(--c-faint)]">
-                    ℹ {t("room.noRandomForLargeRooms")}
+                <div className="mt-4 p-2.5 sm:p-3 rounded-xl border border-[color-mix(in_srgb,var(--c-red)_35%,transparent)] bg-[color-mix(in_srgb,var(--c-red)_10%,transparent)] flex items-center gap-2">
+                  <span className="font-mono text-[11px] text-[var(--c-red)] flex items-center gap-1.5 font-600">
+                    <span className="text-[12px] leading-none">✕</span>
+                    <span>{t("room.seatsLimitHint")}</span>
                   </span>
                 </div>
               )
@@ -929,9 +985,15 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
           <div className="flex items-center justify-between mb-1.5">
             <p className="text-[11px] text-[var(--c-faint)]">{t("room.seats")}</p>
             {seats <= 3 ? (
-              <span className="font-mono text-[10px] text-[var(--c-mint)]">✓ {t("room.seatsLimitHint")}</span>
+              <span className="font-mono text-[10px] text-[var(--c-mint)] flex items-center gap-1">
+                <span>✓</span>
+                <span>{t("room.seatsLimitHint")}</span>
+              </span>
             ) : (
-              <span className="font-mono text-[10px] text-[var(--c-faint)]">{t("room.noRandomForLargeRooms")}</span>
+              <span className="font-mono text-[10px] text-[var(--c-red)] flex items-center gap-1 font-600">
+                <span>✕</span>
+                <span>{t("room.seatsLimitHint")}</span>
+              </span>
             )}
           </div>
           <div className="flex gap-2 mb-5">
