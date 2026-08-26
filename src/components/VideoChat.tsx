@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Peer } from "../lib/sim";
 import { filterProfanity, now, randomPhrase } from "../lib/sim";
 import type { LocalMedia } from "../lib/rtc";
-import { exitMobileFullscreen, isFullscreenActive, requestMobileFullscreen } from "../lib/fullscreen";
+import { enterFullscreen, exitFullscreen, isNativeFullscreen } from "../lib/fullscreen";
 import { useI18n } from "../i18n";
 import {
   IconCam,
@@ -102,11 +102,11 @@ export default function VideoChat({
   /* відстеження повноекранного режиму */
   useEffect(() => {
     const onFsChange = () => {
-      setIsFull(isFullscreenActive());
+      setIsFull(isNativeFullscreen());
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && isFull) {
-        void exitMobileFullscreen();
+        void exitFullscreen();
         setIsFull(false);
       }
     };
@@ -121,9 +121,6 @@ export default function VideoChat({
       document.removeEventListener("mozfullscreenchange", onFsChange);
       document.removeEventListener("MSFullscreenChange", onFsChange);
       window.removeEventListener("keydown", onKey);
-      if (isFullscreenActive()) {
-        void exitMobileFullscreen();
-      }
     };
   }, [isFull]);
 
@@ -258,12 +255,12 @@ export default function VideoChat({
 
   const enterFs = async () => {
     setIsFull(true);
-    await requestMobileFullscreen(boxRef.current);
+    await enterFullscreen(boxRef.current);
   };
 
   const exitFs = async () => {
     setIsFull(false);
-    await exitMobileFullscreen();
+    await exitFullscreen();
   };
 
   const toggleFullscreen = () => {
@@ -401,44 +398,70 @@ export default function VideoChat({
         </div>
       </div>
 
-      {/* панель керування */}
-      <div className={`absolute ${isFull ? "bottom-2 sm:bottom-4 pb-[env(safe-area-inset-bottom,6px)]" : "bottom-2 sm:bottom-4 pb-[env(safe-area-inset-bottom,0px)]"} left-1/2 -translate-x-1/2 z-30 flex justify-center px-1 pointer-events-none w-max max-w-full`}>
-        <div className="pointer-events-auto flex items-center justify-center gap-1.5 sm:gap-2 p-1 bg-[color-mix(in_srgb,var(--c-bg)_78%,transparent)] backdrop-blur-md rounded-2xl border border-[var(--c-line)] shadow-lg overflow-visible">
-          <button className={`btn btn-icon min-h-[44px] min-w-[44px] !p-2 sm:!p-2.5 ${!micOn ? "!text-[var(--c-red)] !border-[color-mix(in_srgb,var(--c-red)_50%,transparent)]" : ""}`} onClick={toggleMic} title={t("video.mic")}>
+      {/* адаптивна панель керування */}
+      <div className={`absolute ${isFull ? "bottom-2 sm:bottom-4 pb-[env(safe-area-inset-bottom,8px)]" : "bottom-2 sm:bottom-4 pb-[env(safe-area-inset-bottom,0px)]"} left-1/2 -translate-x-1/2 z-30 flex justify-center px-1 pointer-events-none w-full max-w-[calc(100vw-8px)] sm:max-w-max`}>
+        <div className="pointer-events-auto flex items-center justify-center gap-1 sm:gap-1.5 p-1 sm:p-1.5 bg-[color-mix(in_srgb,var(--c-bg)_82%,transparent)] backdrop-blur-md rounded-xl sm:rounded-2xl border border-[var(--c-line)] shadow-lg max-w-full overflow-x-auto no-scrollbar">
+          <button
+            className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none ${!micOn ? "!text-[var(--c-red)] !border-[color-mix(in_srgb,var(--c-red)_50%,transparent)]" : ""}`}
+            onClick={toggleMic}
+            title={t("video.mic")}
+            aria-label={t("video.mic")}
+          >
             {micOn ? <IconMic className="w-4 h-4 sm:w-5 sm:h-5" /> : <IconMicOff className="w-4 h-4 sm:w-5 sm:h-5" />}
           </button>
-          <button className={`btn btn-icon min-h-[44px] min-w-[44px] !p-2 sm:!p-2.5 ${!camOn ? "!text-[var(--c-red)] !border-[color-mix(in_srgb,var(--c-red)_50%,transparent)]" : ""}`} onClick={toggleCam} title={t("video.cam")}>
+          <button
+            className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none ${!camOn ? "!text-[var(--c-red)] !border-[color-mix(in_srgb,var(--c-red)_50%,transparent)]" : ""}`}
+            onClick={toggleCam}
+            title={t("video.cam")}
+            aria-label={t("video.cam")}
+          >
             {camOn ? <IconCam className="w-4 h-4 sm:w-5 sm:h-5" /> : <IconCamOff className="w-4 h-4 sm:w-5 sm:h-5" />}
           </button>
-          <button className="btn btn-icon min-h-[44px] min-w-[44px] !p-2 sm:!p-2.5 relative" onClick={() => { setChatOpen((v) => !v); setUnread(0); }} title={t("chat.title")}>
+          <button
+            className="btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none relative"
+            onClick={() => { setChatOpen((v) => !v); setUnread(0); }}
+            title={t("chat.title")}
+            aria-label={t("chat.title")}
+          >
             <IconChat className="w-4 h-4 sm:w-5 sm:h-5" />
             {unread > 0 && !chatOpen && (
-              <span className="absolute -top-1.5 -right-1.5 min-w-[17px] h-[17px] grid place-items-center rounded-full bg-[var(--c-amber)] text-[#14100a] font-mono text-[10px] font-700 px-1">
+              <span className="absolute -top-1 -right-1 min-w-[16px] h-[16px] grid place-items-center rounded-full bg-[var(--c-amber)] text-[#14100a] font-mono text-[9px] font-700 px-0.5">
                 {unread}
               </span>
             )}
           </button>
           <button
-            className={`btn btn-icon min-h-[44px] min-w-[44px] !p-2 sm:!p-2.5 inline-flex ${isFull ? "!text-[var(--c-amber)] !border-[color-mix(in_srgb,var(--c-amber)_50%,transparent)] bg-[color-mix(in_srgb,var(--c-amber)_15%,transparent)]" : ""}`}
+            className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none inline-flex ${isFull ? "!text-[var(--c-amber)] !border-[color-mix(in_srgb,var(--c-amber)_50%,transparent)] bg-[color-mix(in_srgb,var(--c-amber)_15%,transparent)]" : ""}`}
             onClick={toggleFullscreen}
             title={isFull ? t("video.exitFull") : t("video.full")}
             aria-label={isFull ? t("video.exitFull") : t("video.full")}
           >
             {isFull ? <IconExitFull className="w-4 h-4 sm:w-5 sm:h-5" /> : <IconFull className="w-4 h-4 sm:w-5 sm:h-5" />}
           </button>
-          <span className="w-px h-6 sm:h-7 bg-[var(--c-line2)] mx-0.5 flex-none opacity-70" />
+          <span className="w-px h-5 sm:h-7 bg-[var(--c-line2)] mx-0.5 flex-none opacity-60" />
           <button
-            className="btn btn-red btn-icon min-h-[44px] min-w-[44px] !p-2 sm:!p-2.5 !bg-[color-mix(in_srgb,var(--c-red)_40%,transparent)] !border-[var(--c-red)] !text-[var(--c-red)] hover:!bg-[color-mix(in_srgb,var(--c-red)_60%,transparent)] backdrop-blur-md shadow-[0_0_16px_-2px_color-mix(in_srgb,var(--c-red)_40%,transparent)]"
+            className="btn btn-red btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none !bg-[color-mix(in_srgb,var(--c-red)_40%,transparent)] !border-[var(--c-red)] !text-[var(--c-red)] hover:!bg-[color-mix(in_srgb,var(--c-red)_60%,transparent)] backdrop-blur-md shadow-[0_0_16px_-2px_color-mix(in_srgb,var(--c-red)_40%,transparent)]"
             onClick={() => onLeave("end")}
             title={t("ctl.end")}
+            aria-label={t("ctl.end")}
           >
             <IconEnd className="w-4 h-4 sm:w-5 sm:h-5" />
           </button>
-          <button className="btn btn-amber min-h-[44px] !px-3.5 sm:!px-5 !py-2 !text-xs sm:!text-sm font-700 whitespace-nowrap" onClick={() => onLeave("next")}>
-            <IconNext className="w-4 h-4 sm:w-5 sm:h-5" />
-            {t("ctl.next")}
+          <button
+            className="btn btn-amber min-h-[38px] sm:min-h-[44px] !px-2.5 sm:!px-4 !py-1.5 sm:!py-2 !text-xs sm:!text-sm font-700 whitespace-nowrap flex-none flex items-center gap-1 sm:gap-1.5"
+            onClick={() => onLeave("next")}
+            title={t("ctl.next")}
+            aria-label={t("ctl.next")}
+          >
+            <IconNext className="w-3.5 h-3.5 sm:w-4.5 sm:h-4.5" />
+            <span>{t("ctl.next")}</span>
           </button>
-          <button className={`btn btn-icon min-h-[44px] min-w-[44px] !p-2 sm:!p-2.5 ${cool ? "opacity-40" : "!text-[var(--c-amber)]"}`} onClick={report} title={t("ctl.report")}>
+          <button
+            className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none ${cool ? "opacity-40" : "!text-[var(--c-amber)]"}`}
+            onClick={report}
+            title={t("ctl.report")}
+            aria-label={t("ctl.report")}
+          >
             <IconFlag className="w-4 h-4 sm:w-5 sm:h-5" />
           </button>
         </div>

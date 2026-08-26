@@ -12,7 +12,7 @@ import {
   type RoomId,
 } from "../lib/sim";
 import type { LocalMedia } from "../lib/rtc";
-import { exitMobileFullscreen, isFullscreenActive, requestMobileFullscreen } from "../lib/fullscreen";
+import { enterFullscreen, exitFullscreen, isNativeFullscreen } from "../lib/fullscreen";
 import { useI18n } from "../i18n";
 import { useScramble } from "../lib/hooks";
 import {
@@ -192,11 +192,11 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   /* відстеження повноекранного режиму */
   useEffect(() => {
     const onFsChange = () => {
-      setIsFull(isFullscreenActive());
+      setIsFull(isNativeFullscreen());
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && isFull) {
-        void exitMobileFullscreen();
+        void exitFullscreen();
         setIsFull(false);
       }
     };
@@ -211,20 +211,17 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
       document.removeEventListener("mozfullscreenchange", onFsChange);
       document.removeEventListener("MSFullscreenChange", onFsChange);
       window.removeEventListener("keydown", onKey);
-      if (isFullscreenActive()) {
-        void exitMobileFullscreen();
-      }
     };
   }, [isFull]);
 
   const enterFs = async () => {
     setIsFull(true);
-    await requestMobileFullscreen(roomBoxRef.current);
+    await enterFullscreen(roomBoxRef.current);
   };
 
   const exitFs = async () => {
     setIsFull(false);
-    await exitMobileFullscreen();
+    await exitFullscreen();
   };
 
   const toggleFullscreen = () => {

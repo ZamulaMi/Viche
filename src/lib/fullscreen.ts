@@ -1,89 +1,60 @@
 /**
- * Утиліти для надійного повноекранного режиму (Fullscreen API)
- * з примусовим приховуванням панелей та інтерфейсу браузера на мобільних пристроях.
+ * Надійне крос-браузерне керування повноекранним режимом (Desktop + Mobile)
  */
 
-export type FullscreenOptionsExtended = FullscreenOptions & {
-  navigationUI?: "hide" | "show" | "auto";
-};
-
-interface WebKitElement extends HTMLElement {
-  webkitRequestFullscreen?: (options?: FullscreenOptionsExtended) => Promise<void> | void;
-  mozRequestFullScreen?: (options?: FullscreenOptionsExtended) => Promise<void> | void;
-  msRequestFullscreen?: (options?: FullscreenOptionsExtended) => Promise<void> | void;
-}
-
-interface WebKitDocument extends Document {
-  webkitFullscreenElement?: Element;
-  mozFullScreenElement?: Element;
-  msFullscreenElement?: Element;
-  webkitExitFullscreen?: () => Promise<void> | void;
-  mozCancelFullScreen?: () => Promise<void> | void;
-  msExitFullscreen?: () => Promise<void> | void;
-}
-
-export function isFullscreenActive(): boolean {
+export function isNativeFullscreen(): boolean {
   if (typeof document === "undefined") return false;
-  const doc = document as WebKitDocument;
+  const doc = document as any;
   return !!(
     doc.fullscreenElement ||
     doc.webkitFullscreenElement ||
     doc.mozFullScreenElement ||
-    doc.msFullscreenElement ||
-    document.body.classList.contains("is-fullscreen")
+    doc.msFullscreenElement
   );
 }
 
-export async function requestMobileFullscreen(targetElement?: HTMLElement | null): Promise<boolean> {
+export async function enterFullscreen(element?: HTMLElement | null): Promise<boolean> {
   if (typeof window === "undefined" || typeof document === "undefined") return false;
 
-  const el = (targetElement || document.documentElement) as WebKitElement;
-  const doc = document as WebKitDocument;
-
-  // Фіксація body проти небажаного скролу/жестів згортання в браузері
-  document.body.classList.add("is-fullscreen");
-  window.scrollTo({ top: 0, left: 0 });
-
-  const fsOptions: FullscreenOptionsExtended = {
-    navigationUI: "hide",
-  };
+  const target = element || document.documentElement;
+  const el = target as any;
 
   try {
+    // 1. Спроба з приховуванням системної навігації (Android Chrome / WebRTC)
     if (el.requestFullscreen) {
-      await el.requestFullscreen(fsOptions);
-      return true;
+      try {
+        await el.requestFullscreen({ navigationUI: "hide" });
+        return true;
+      } catch {
+        // Деякі браузери (Safari/Desktop) не підтримують об'єкт options у requestFullscreen
+        await el.requestFullscreen();
+        return true;
+      }
     } else if (el.webkitRequestFullscreen) {
-      el.webkitRequestFullscreen(fsOptions);
+      el.webkitRequestFullscreen();
       return true;
     } else if (el.mozRequestFullScreen) {
-      el.mozRequestFullScreen(fsOptions);
+      el.mozRequestFullScreen();
       return true;
     } else if (el.msRequestFullscreen) {
-      el.msRequestFullscreen(fsOptions);
+      el.msRequestFullscreen();
       return true;
     }
-  } catch {
-    // Якщо браузер обмежує Fullscreen API (наприклад, у деяких версіях iOS Safari),
-    // CSS-режим (is-fullscreen + fixed inset-0 100dvh) забезпечує повноекранний вигляд
+  } catch (err) {
+    console.warn("Fullscreen request failed or restricted:", err);
   }
 
-  return true;
+  // Якщо браузер обмежує Fullscreen API (наприклад, iPhone Safari або iframe без allowfullscreen),
+  // повертаємо false, щоб компонент увімкнув повноекранний CSS-режим (100dvh fallback)
+  return false;
 }
 
-export async function exitMobileFullscreen(): Promise<void> {
+export async function exitFullscreen(): Promise<void> {
   if (typeof document === "undefined") return;
-  const doc = document as WebKitDocument;
-
-  document.body.classList.remove("is-fullscreen");
+  const doc = document as any;
 
   try {
-    const fsEl =
-      doc.fullscreenElement ||
-      doc.webkitFullscreenElement ||
-      doc.mozFullScreenElement ||
-      doc.msFullscreenElement;
-
-    if (fsEl) {
+    if (isNativeFullscreen()) {
       if (doc.exitFullscreen) {
         await doc.exitFullscreen();
       } else if (doc.webkitExitFullscreen) {
@@ -94,7 +65,7 @@ export async function exitMobileFullscreen(): Promise<void> {
         doc.msExitFullscreen();
       }
     }
-  } catch {
-    /* noop */
+  } catch (err) {
+    console.warn("Exit fullscreen failed:", err);
   }
 }
