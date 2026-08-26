@@ -63,11 +63,12 @@ export class RoomNet {
   private joinTimer = 0;
   private detachNet: (() => void) | null = null;
 
-  /* ── aux-потоки: хост ретранслює відео «випадкових гостей» (з пулу
-     рулетки) всім учасникам кімнати. Ключ — auxId. Окремо зберігаємо
-     самі потоки, щоб учасник, який зайшов пізніше, теж їх отримав. ── */
+  /* aux-потоки: хост ретранслює відео «випадкових гостей» */
   private auxCalls = new Map<string, MediaConnection[]>(); // auxId → виклики до учасників
   private auxStreams = new Map<string, { name: string; stream: MediaStream }>();
+  private memberDropTimers = new Map<string, number>();
+  private guestReconnectTimer = 0;
+  private isReconnecting = false;
 
   constructor(
     room: RoomId,
@@ -79,11 +80,33 @@ export class RoomNet {
   ) {
     this.room = room;
     this.hostId = PREFIX + roomIdStr(room);
-    this.detachNet = attachNetRecovery(() => [...this.calls.values()]);
+    this.detachNet = attachNetRecovery(
+      () => [...this.calls.values()],
+      () => this.handleNetworkChange()
+    );
     if (asCreator) {
       this.tryHost();
     } else {
       this.joinAsGuest();
+    }
+  }
+
+  private handleNetworkChange() {
+    if (this.disposed) return;
+    if (this.peer && this.peer.disconnected && !this.peer.destroyed) {
+      try {
+        this.peer.reconnect();
+      } catch {
+        /* noop */
+      }
+    }
+    if (this.isHost) {
+      this.meshSync();
+    } else {
+      const hostConn = this.conns.get(this.hostId);
+      if (!hostConn || !hostConn.open) {
+        this.attemptGuestReconnect();
+      }
     }
   }
 
@@ -146,23 +169,49 @@ export class RoomNet {
       this.roster = [{ id: this.hostId, name: this.name }];
       this.hooks.onRoster(this.roster);
     });
+
+    p.on("disconnected", () => {
+      if (!this.disposed && p === this.peer) {
+        try {
+          p.reconnect();
+        } catch {
+          /* noop */
+        }
+      }
+    });
+
     p.on("error", (e) => {
       const t = (e as { type?: string }).type;
-      p.destroy();
       if (this.disposed) return;
       if (t === "unavailable-id") {
+        p.destroy();
         // хост уже є (або хтось зайняв номер) → гість / перестворення
         this.hooks.onStatus(this.roster.length ? "guest" : "exists");
         if (!this.roster.length) this.joinAsGuest();
       } else if (t === "network" || t === "socket-error" || t === "socket-closed" || t === "server-error") {
-        this.hooks.onStatus("closed");
+        // При тимчасовому збої мережі намагаємось відновити сокет
+        try {
+          p.reconnect();
+        } catch {
+          /* noop */
+        }
       }
     });
   }
 
   private onJoin(conn: DataConnection, m: Extract<RMsg, { type: "join" }>) {
     const id = conn.peer;
-    if (this.roster.some((x) => x.id === id)) return;
+    // Якщо учасник повертається після відновлення мережі — скидаємо таймер видалення
+    const dropTimer = this.memberDropTimers.get(id);
+    if (dropTimer) {
+      window.clearTimeout(dropTimer);
+      this.memberDropTimers.delete(id);
+    }
+    if (this.roster.some((x) => x.id === id)) {
+      this.broadcastRoster();
+      this.meshSync();
+      return;
+    }
     if (this.roster.length >= this.seats) {
       try {
         conn.send({ type: "full" } satisfies RMsg);
@@ -224,26 +273,81 @@ export class RoomNet {
           this.hooks.onStatus("not-found");
         }
       });
-      const conn = p.connect(this.hostId, { reliable: true });
+      this.connectToHost();
+      window.clearTimeout(this.joinTimer);
+      this.joinTimer = window.setTimeout(() => {
+        if (this.roster.length === 0 && !this.disposed && !this.isReconnecting) {
+          this.hooks.onStatus("not-found");
+        }
+      }, 9000);
+    });
+
+    p.on("disconnected", () => {
+      if (!this.disposed && p === this.peer) {
+        try {
+          p.reconnect();
+        } catch {
+          /* noop */
+        }
+        this.attemptGuestReconnect();
+      }
+    });
+
+    p.on("error", (e) => {
+      const t = (e as { type?: string }).type;
+      if (this.disposed) return;
+      if (t === "peer-unavailable" && this.roster.length === 0) {
+        this.hooks.onStatus("not-found");
+      } else if (t === "network" || t === "socket-error" || t === "socket-closed") {
+        this.attemptGuestReconnect();
+      }
+    });
+  }
+
+  private connectToHost() {
+    if (!this.peer || this.peer.destroyed || this.disposed) return;
+    try {
+      const conn = this.peer.connect(this.hostId, { reliable: true });
       this.wireData(conn);
       conn.on("open", () => {
+        this.isReconnecting = false;
+        window.clearTimeout(this.guestReconnectTimer);
         try {
           conn.send({ type: "join", name: this.name } satisfies RMsg);
         } catch {
           /* noop */
         }
       });
-      window.clearTimeout(this.joinTimer);
-      this.joinTimer = window.setTimeout(() => {
-        if (this.roster.length === 0 && !this.disposed) this.hooks.onStatus("not-found");
-      }, 9000);
-    });
-    p.on("error", (e) => {
-      const t = (e as { type?: string }).type;
-      if (this.disposed) return;
-      if (t === "peer-unavailable" && this.roster.length === 0) this.hooks.onStatus("not-found");
-      else if (t === "network" || t === "socket-error" || t === "socket-closed") this.hooks.onStatus("closed");
-    });
+    } catch {
+      /* noop */
+    }
+  }
+
+  private attemptGuestReconnect() {
+    if (this.isHost || this.disposed) return;
+    if (!this.isReconnecting) {
+      this.isReconnecting = true;
+      window.clearTimeout(this.guestReconnectTimer);
+      this.guestReconnectTimer = window.setTimeout(() => {
+        if (this.isReconnecting && !this.disposed) {
+          this.hooks.onStatus("closed");
+        }
+      }, 8500);
+    }
+
+    if (this.peer && this.peer.disconnected && !this.peer.destroyed) {
+      try {
+        this.peer.reconnect();
+      } catch {
+        /* noop */
+      }
+    }
+
+    window.setTimeout(() => {
+      if (this.isReconnecting && !this.disposed) {
+        this.connectToHost();
+      }
+    }, 450);
   }
 
   /* ── data-канали: ростер, чат, кік ── */
@@ -255,6 +359,8 @@ export class RoomNet {
       if (!m?.type) return;
       if (m.type === "roster") {
         window.clearTimeout(this.joinTimer);
+        window.clearTimeout(this.guestReconnectTimer);
+        this.isReconnecting = false;
         this.roster = m.members;
         this.hooks.onRoster(m.members);
         if (!this.isHost) this.hooks.onStatus("guest");
@@ -270,16 +376,31 @@ export class RoomNet {
         this.hooks.onStatus("full");
       }
     });
+
     conn.on("close", () => {
       if (this.conns.get(pid) === conn) this.conns.delete(pid);
       if (this.disposed) return;
       if (this.isHost && this.roster.some((x) => x.id === pid)) {
-        this.roster = this.roster.filter((x) => x.id !== pid);
-        this.broadcastRoster();
+        // М'який таймер для хоста перед вилученням учасника (7.5 с замість миттєвого дропу)
+        const oldTimer = this.memberDropTimers.get(pid);
+        if (oldTimer) window.clearTimeout(oldTimer);
+        const timer = window.setTimeout(() => {
+          this.memberDropTimers.delete(pid);
+          if (this.isHost && !this.disposed) {
+            this.roster = this.roster.filter((x) => x.id !== pid);
+            this.broadcastRoster();
+            this.hooks.onPeerGone(pid);
+          }
+        }, 7500);
+        this.memberDropTimers.set(pid, timer);
+      } else {
+        this.hooks.onPeerGone(pid);
       }
-      this.hooks.onPeerGone(pid);
-      if (!this.isHost && pid === this.hostId) this.hooks.onStatus("closed");
+      if (!this.isHost && pid === this.hostId) {
+        this.attemptGuestReconnect();
+      }
     });
+
     conn.on("error", () => {
       /* noop */
     });
@@ -568,6 +689,9 @@ export class RoomNet {
     if (this.disposed) return;
     this.disposed = true;
     window.clearTimeout(this.joinTimer);
+    window.clearTimeout(this.guestReconnectTimer);
+    this.memberDropTimers.forEach((timer) => window.clearTimeout(timer));
+    this.memberDropTimers.clear();
     this.detachNet?.();
     this.calls.forEach((c) => {
       try {

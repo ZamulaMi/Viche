@@ -46,7 +46,7 @@ const relayOnly = env.VITE_RELAY_ONLY === "true" || env.VITE_RELAY_ONLY === "1";
 export const iceConfig: RTCConfiguration = {
   iceServers: [
     ...customTurn,
-    // Найнадійніші відкриті глобальні STUN-сервери з миттєвим часом відповіді
+    // Надійні відкриті глобальні STUN-сервери з підтримкою IPv4/IPv6 та стільникових мереж
     {
       urls: [
         "stun:stun.l.google.com:19302",
@@ -55,11 +55,13 @@ export const iceConfig: RTCConfiguration = {
         "stun:stun3.l.google.com:19302",
         "stun:stun4.l.google.com:19302",
         "stun:stun.cloudflare.com:3478",
+        "stun:stun.services.mozilla.com:3478",
+        "stun:stun.voip.blackberry.com:3478",
       ],
     },
   ],
   ...(relayOnly ? { iceTransportPolicy: "relay" as RTCIceTransportPolicy } : {}),
-  iceCandidatePoolSize: 2,
+  iceCandidatePoolSize: 4,
 };
 
 /* Спільні налаштування PeerJS */
@@ -97,25 +99,56 @@ export async function icePathInfo(pc: RTCPeerConnection): Promise<string> {
 }
 
 /* Повторне встановлення медіа після зміни мережі (Wi-Fi ↔ мобільні дані):
-   ICE restart на живих RTCPeerConnection — сигнали йдуть тим самим
-   (автовідновлюваним PeerJS) WebSocket-каналом.                        */
-export function restartIceOn(call: MediaConnection | null | undefined) {
+   ICE restart на живих RTCPeerConnection */
+export function restartIceOn(call: MediaConnection | null | undefined): boolean {
   try {
     const pc = call?.peerConnection;
-    if (pc && pc.signalingState !== "closed") pc.restartIce();
+    if (pc && pc.signalingState !== "closed") {
+      if (typeof pc.restartIce === "function") {
+        pc.restartIce();
+        return true;
+      }
+    }
   } catch {
     /* noop */
   }
+  return false;
 }
 
-export function attachNetRecovery(getCalls: () => Array<MediaConnection | null | undefined>) {
-  const bump = () => getCalls().forEach(restartIceOn);
-  window.addEventListener("online", bump);
-  const nav = navigator as Navigator & { connection?: { addEventListener?: (t: string, f: () => void) => void; removeEventListener?: (t: string, f: () => void) => void } };
-  const connChange = () => window.setTimeout(bump, 400);
-  nav.connection?.addEventListener?.("change", connChange);
+export function attachNetRecovery(
+  getCalls: () => Array<MediaConnection | null | undefined>,
+  onNetworkChange?: () => void
+) {
+  let debounceTimer = 0;
+  const trigger = () => {
+    window.clearTimeout(debounceTimer);
+    debounceTimer = window.setTimeout(() => {
+      getCalls().forEach(restartIceOn);
+      onNetworkChange?.();
+    }, 350);
+  };
+
+  window.addEventListener("online", trigger);
+  window.addEventListener("pageshow", trigger);
+
+  const onVis = () => {
+    if (document.visibilityState === "visible") trigger();
+  };
+  document.addEventListener("visibilitychange", onVis);
+
+  const nav = navigator as Navigator & {
+    connection?: {
+      addEventListener?: (t: string, f: () => void) => void;
+      removeEventListener?: (t: string, f: () => void) => void;
+    };
+  };
+  nav.connection?.addEventListener?.("change", trigger);
+
   return () => {
-    window.removeEventListener("online", bump);
-    nav.connection?.removeEventListener?.("change", connChange);
+    window.clearTimeout(debounceTimer);
+    window.removeEventListener("online", trigger);
+    window.removeEventListener("pageshow", trigger);
+    document.removeEventListener("visibilitychange", onVis);
+    nav.connection?.removeEventListener?.("change", trigger);
   };
 }

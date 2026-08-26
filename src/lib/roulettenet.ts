@@ -97,6 +97,9 @@ export class RouletteNet {
   private beaconAcquiring = false;
   private connectWatchdog = 0;
   private fallbackInitiatorTimer = 0;
+  private recoveryTimer = 0;
+  private recovering = false;
+  private explicitBye = false;
   private detachNet: (() => void) | null = null;
   private chatListeners = new Set<(t: string) => void>();
 
@@ -119,7 +122,28 @@ export class RouletteNet {
   };
 
   constructor(private stream: MediaStream, private hooks: RouletteHooks) {
-    this.detachNet = attachNetRecovery(() => [this.call]);
+    this.detachNet = attachNetRecovery(
+      () => [this.call],
+      () => this.handleNetworkChange()
+    );
+  }
+
+  private handleNetworkChange() {
+    if (this.disposed) return;
+    // Якщо вузол втратив зв'язок із сигнальним сервером через зміну IP
+    if (this.myPeer && this.myPeer.disconnected && !this.myPeer.destroyed) {
+      try {
+        this.myPeer.reconnect();
+      } catch {
+        /* noop */
+      }
+    }
+    // Якщо активна пара — ініціюємо м'яке відновлення зв'язку
+    if (this.paired) {
+      this.triggerActiveCallRecovery();
+    } else if (this.searching) {
+      this.initMyPeer();
+    }
   }
 
   get chat() {
@@ -241,6 +265,16 @@ export class RouletteNet {
         return;
       }
       if (this.isFatal(err.type)) {
+        if (this.paired) {
+          // При зміні мережі не розриваємо пару негайно — намагаємось перепідключити сокет
+          try {
+            p.reconnect();
+          } catch {
+            /* noop */
+          }
+          this.triggerActiveCallRecovery();
+          return;
+        }
         this.destroyMyPeer();
         if (this.searching && !this.paired) {
           window.setTimeout(() => {
@@ -251,11 +285,14 @@ export class RouletteNet {
     });
 
     p.on("disconnected", () => {
-      if (!this.disposed && this.searching && p === this.myPeer) {
+      if (!this.disposed && p === this.myPeer) {
         try {
           p.reconnect();
         } catch {
           /* noop */
+        }
+        if (this.paired) {
+          this.triggerActiveCallRecovery();
         }
       }
     });
@@ -532,6 +569,7 @@ export class RouletteNet {
     if (this.paired || this.disposed || !this.searching) return;
     this.paired = true;
     this.connected = false;
+    this.explicitBye = false;
     this.partnerId = partnerDirectId;
 
     this.stopProbing();
@@ -565,34 +603,39 @@ export class RouletteNet {
   private initiateCallAndChat(partnerDirectId: string) {
     if (!this.myPeer || this.disposed || !this.paired) return;
 
-    if (!this.chatConn) {
-      const c = this.myPeer.connect(partnerDirectId, { reliable: true });
-      this.chatConn = c;
-      c.on("open", () => {
-        try {
-          c.send({ t: "chello", from: this.myPeerId } satisfies Wire);
-        } catch {
-          /* noop */
-        }
-      });
-      this.wireChat(c);
+    if (!this.chatConn || !this.chatConn.open) {
+      try {
+        const c = this.myPeer.connect(partnerDirectId, { reliable: true });
+        this.chatConn = c;
+        c.on("open", () => {
+          try {
+            c.send({ t: "chello", from: this.myPeerId } satisfies Wire);
+          } catch {
+            /* noop */
+          }
+        });
+        this.wireChat(c);
+      } catch {
+        /* noop */
+      }
     }
 
     if (!this.call) {
-      const call = this.myPeer.call(partnerDirectId, this.stream);
-      this.wireCall(call);
+      try {
+        const call = this.myPeer.call(partnerDirectId, this.stream);
+        if (call) this.wireCall(call);
+      } catch {
+        /* noop */
+      }
     }
   }
 
   private onIncomingPeerConnection(conn: DataConnection) {
     if (!this.paired || conn.peer !== this.partnerId) {
-      // Не від нашого поточного партнера
       return;
     }
-    if (!this.chatConn) {
-      this.chatConn = conn;
-      this.wireChat(conn);
-    }
+    this.chatConn = conn;
+    this.wireChat(conn);
   }
 
   private onIncomingPeerCall(call: MediaConnection) {
@@ -605,8 +648,12 @@ export class RouletteNet {
       return;
     }
     window.clearTimeout(this.fallbackInitiatorTimer);
-    call.answer(this.stream);
-    this.wireCall(call);
+    try {
+      call.answer(this.stream);
+      this.wireCall(call);
+    } catch {
+      /* noop */
+    }
   }
 
   private wireChat(c: DataConnection) {
@@ -616,13 +663,19 @@ export class RouletteNet {
       if (m.t === "chat") {
         this.emitChat(m.text);
       } else if (m.t === "bye") {
+        this.explicitBye = true;
         this.partnerLeft();
       }
     });
 
     c.on("close", () => {
       if (this.chatConn === c && this.paired) {
-        this.partnerLeft();
+        if (this.explicitBye) {
+          this.partnerLeft();
+        } else {
+          // Можливий розрив TCP при зміні мережі (Wi-Fi ↔ LTE) — спробуємо відновити
+          this.triggerActiveCallRecovery();
+        }
       }
     });
 
@@ -634,12 +687,12 @@ export class RouletteNet {
   private wireCall(call: MediaConnection) {
     this.call = call;
     let streamEmitted = false;
-    let restarted = false;
 
     const emitStream = (s: MediaStream) => {
       if (streamEmitted || this.disposed || !this.paired) return;
       streamEmitted = true;
       this.connected = true;
+      this.cancelRecovery();
       window.clearTimeout(this.connectWatchdog);
       window.clearTimeout(this.fallbackInitiatorTimer);
       this.hooks.onState("paired");
@@ -666,26 +719,26 @@ export class RouletteNet {
 
       try {
         pc.addEventListener("connectionstatechange", () => {
-          if (this.disposed) return;
+          if (this.disposed || !this.paired) return;
           const st = pc.connectionState;
           if (st === "connected") {
+            this.cancelRecovery();
             void icePathInfo(pc).then((tp) => this.hooks.onIce?.(tp));
-          } else if (st === "failed") {
-            if (!restarted) {
-              restarted = true;
-              restartIceOn(call);
-            } else {
-              this.partnerLeft();
-            }
+          } else if (st === "failed" || st === "disconnected") {
+            this.triggerActiveCallRecovery();
           } else {
             this.hooks.onIce?.(st);
           }
         });
 
         pc.addEventListener("iceconnectionstatechange", () => {
-          if (this.disposed) return;
-          if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+          if (this.disposed || !this.paired) return;
+          const iceSt = pc.iceConnectionState;
+          if (iceSt === "connected" || iceSt === "completed") {
+            this.cancelRecovery();
             void icePathInfo(pc).then((tp) => this.hooks.onIce?.(tp));
+          } else if (iceSt === "failed" || iceSt === "disconnected") {
+            this.triggerActiveCallRecovery();
           }
         });
       } catch {
@@ -694,7 +747,13 @@ export class RouletteNet {
     }
 
     call.on("close", () => {
-      if (this.paired) this.partnerLeft();
+      if (this.paired) {
+        if (this.explicitBye) {
+          this.partnerLeft();
+        } else {
+          this.triggerActiveCallRecovery();
+        }
+      }
     });
 
     call.on("error", () => {
@@ -702,8 +761,72 @@ export class RouletteNet {
     });
   }
 
+  /* ── Автоматичне відновлення зв'язку при перемиканні мережі ── */
+  private triggerActiveCallRecovery() {
+    if (!this.paired || this.disposed || this.explicitBye) return;
+
+    this.hooks.onIce?.("disconnected");
+
+    // Запускаємо таймер очікування відновлення зв'язку (8.5 секунд замість миттєвого дропу)
+    if (!this.recovering) {
+      this.recovering = true;
+      window.clearTimeout(this.recoveryTimer);
+      this.recoveryTimer = window.setTimeout(() => {
+        if (this.paired && this.recovering && !this.disposed) {
+          this.partnerLeft();
+        }
+      }, 8500);
+    }
+
+    // 1. Якщо локальний Peer втратив WS-з'єднання з сигналінгом, підключаємо знову
+    if (this.myPeer && this.myPeer.disconnected && !this.myPeer.destroyed) {
+      try {
+        this.myPeer.reconnect();
+      } catch {
+        /* noop */
+      }
+    }
+
+    // 2. Викликаємо ICE restart на поточному RTCPeerConnection
+    if (this.call) {
+      restartIceOn(this.call);
+    }
+
+    // 3. Якщо ми ініціатор або якщо минуло >3.5 с — робимо повторний виклик по новому IP
+    if (this.partnerId && this.myPeer && !this.myPeer.destroyed) {
+      const isInitiator = this.cmp(this.myPeerId, this.partnerId) < 0;
+      window.setTimeout(() => {
+        if (this.paired && this.recovering && this.partnerId && !this.disposed) {
+          if (isInitiator || !this.call || this.call.peerConnection?.connectionState === "failed") {
+            try {
+              if (!this.chatConn || !this.chatConn.open) {
+                const c = this.myPeer?.connect(this.partnerId, { reliable: true });
+                if (c) {
+                  this.chatConn = c;
+                  this.wireChat(c);
+                }
+              }
+              const newCall = this.myPeer?.call(this.partnerId, this.stream);
+              if (newCall) {
+                this.wireCall(newCall);
+              }
+            } catch {
+              /* noop */
+            }
+          }
+        }
+      }, 600);
+    }
+  }
+
+  private cancelRecovery() {
+    this.recovering = false;
+    window.clearTimeout(this.recoveryTimer);
+  }
+
   private partnerLeft() {
     if (!this.paired || this.disposed) return;
+    this.cancelRecovery();
     this.teardownPair();
     this.hooks.onIce?.("");
     this.hooks.onPeerLeft();
@@ -717,9 +840,12 @@ export class RouletteNet {
   private teardownPair() {
     this.paired = false;
     this.connected = false;
+    this.recovering = false;
+    this.explicitBye = false;
     this.partnerId = null;
     window.clearTimeout(this.connectWatchdog);
     window.clearTimeout(this.fallbackInitiatorTimer);
+    window.clearTimeout(this.recoveryTimer);
 
     if (this.chatConn) {
       try {
