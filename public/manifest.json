@@ -1,0 +1,20 @@
+{
+  "name": "Viche — анонімні відеозбори",
+  "short_name": "Viche",
+  "description": "Viche — платформа анонімного відео/аудіо спілкування: рулетка, приватні кімнати, P2P WebRTC.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone", "window-controls-overlay"],
+  "background_color": "#0a110d",
+  "theme_color": "#0a110d",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230D1712'/%3E%3Cpath d='M7 8l9 17L25 8' stroke='%23F0A83C' stroke-width='3.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='16' cy='25' r='2.4' fill='%2343D69A'/%3E%3C/svg%3E",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

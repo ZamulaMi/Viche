@@ -55,6 +55,25 @@
   color-scheme: light;
 }
 
+/* ── Fullscreen & Safe Areas (Mobile optimization) ────────── */
+body.is-fullscreen {
+  overflow: hidden !important;
+  touch-action: manipulation;
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: auto;
+}
+
+:fullscreen,
+:-webkit-full-screen,
+:-moz-full-screen,
+:fullscreen * {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:fullscreen {
+  background-color: #000000 !important;
+}
+
 /* ── Base ─────────────────────────────────────────────────── */
 html,
 body {

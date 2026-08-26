@@ -12,6 +12,7 @@ import {
   type RoomId,
 } from "../lib/sim";
 import type { LocalMedia } from "../lib/rtc";
+import { exitMobileFullscreen, isFullscreenActive, requestMobileFullscreen } from "../lib/fullscreen";
 import { useI18n } from "../i18n";
 import { useScramble } from "../lib/hooks";
 import {
@@ -19,6 +20,8 @@ import {
   IconClose,
   IconCopy,
   IconEnd,
+  IconExitFull,
+  IconFull,
   IconLink,
   IconMicOff,
   IconPlus,
@@ -172,6 +175,8 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState("");
   const [recents, setRecents] = useState<StoredRoom[]>(loadRecent);
+  const [isFull, setIsFull] = useState(false);
+  const roomBoxRef = useRef<HTMLDivElement>(null);
 
   const netRef = useRef<RoomNet | null>(null);
   const creatorRef = useRef(false);
@@ -183,6 +188,52 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   useEffect(() => {
     tRef.current = t;
   }, [t]);
+
+  /* відстеження повноекранного режиму */
+  useEffect(() => {
+    const onFsChange = () => {
+      setIsFull(isFullscreenActive());
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && isFull) {
+        void exitMobileFullscreen();
+        setIsFull(false);
+      }
+    };
+    document.addEventListener("fullscreenchange", onFsChange);
+    document.addEventListener("webkitfullscreenchange", onFsChange);
+    document.addEventListener("mozfullscreenchange", onFsChange);
+    document.addEventListener("MSFullscreenChange", onFsChange);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFsChange);
+      document.removeEventListener("webkitfullscreenchange", onFsChange);
+      document.removeEventListener("mozfullscreenchange", onFsChange);
+      document.removeEventListener("MSFullscreenChange", onFsChange);
+      window.removeEventListener("keydown", onKey);
+      if (isFullscreenActive()) {
+        void exitMobileFullscreen();
+      }
+    };
+  }, [isFull]);
+
+  const enterFs = async () => {
+    setIsFull(true);
+    await requestMobileFullscreen(roomBoxRef.current);
+  };
+
+  const exitFs = async () => {
+    setIsFull(false);
+    await exitMobileFullscreen();
+  };
+
+  const toggleFullscreen = () => {
+    if (isFull) {
+      void exitFs();
+    } else {
+      void enterFs();
+    }
+  };
 
   const push = useCallback((kind: ChatMsg["kind"], text: string, extra?: Partial<ChatMsg>) => {
     setMsgs((m) => [...m.slice(-80), { id: ++mid, kind, text, time: now(), ...extra }]);
@@ -481,7 +532,14 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   /* ── Екран кімнати ── */
   if (screen === "room" && room) {
     return (
-      <div className="fadeup">
+      <div
+        ref={roomBoxRef}
+        className={
+          isFull
+            ? "fixed inset-0 z-[9999] w-screen h-[100dvh] bg-black overflow-y-auto p-3 sm:p-6 pt-[env(safe-area-inset-top,12px)] pb-[calc(env(safe-area-inset-bottom,12px)+24px)] flex flex-col select-none"
+            : "fadeup"
+        }
+      >
         <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-4 sm:mb-5">
           <div className="min-w-0">
             <p className="panel-title text-[10px] sm:text-[11px]">{t("room.live")}</p>
@@ -512,10 +570,24 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
               {iceInfo}
             </span>
           )}
-          <button className="btn btn-red !py-2 !px-3.5 sm:!px-4 ml-auto !text-xs sm:!text-sm" onClick={leaveRoom}>
-            <IconEnd className="w-4 h-4" />
-            {t("room.leave")}
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              className={`btn btn-icon min-h-[40px] min-w-[40px] !py-2 !px-2.5 sm:!px-3 ${
+                isFull
+                  ? "!text-[var(--c-amber)] !border-[color-mix(in_srgb,var(--c-amber)_50%,transparent)] bg-[color-mix(in_srgb,var(--c-amber)_15%,transparent)]"
+                  : ""
+              }`}
+              onClick={toggleFullscreen}
+              title={isFull ? t("video.exitFull") : t("video.full")}
+              aria-label={isFull ? t("video.exitFull") : t("video.full")}
+            >
+              {isFull ? <IconExitFull className="w-4 h-4 sm:w-4.5 sm:h-4.5" /> : <IconFull className="w-4 h-4 sm:w-4.5 sm:h-4.5" />}
+            </button>
+            <button className="btn btn-red !py-2 !px-3.5 sm:!px-4 !text-xs sm:!text-sm min-h-[40px]" onClick={leaveRoom}>
+              <IconEnd className="w-4 h-4" />
+              {t("room.leave")}
+            </button>
+          </div>
         </div>
 
         <div className="grid lg:grid-cols-[minmax(0,1fr)_330px] gap-4 items-start">
