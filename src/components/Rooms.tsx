@@ -786,27 +786,38 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
         </div>
 
         <div className={`grid ${isFull ? "lg:grid-cols-[minmax(0,1fr)_300px] flex-1 min-h-0" : "lg:grid-cols-[minmax(0,1fr)_330px]"} gap-4 items-start`}>
-          {/* ── Сітка учасників (якщо 2 учасники в повноекранному режимі: вертикально — зверху/знизу, горизонтально — справа/зліва) ── */}
+          {/* ── Сітка учасників (якщо 2 учасники: вертикально — зверху/знизу 50/50, горизонтально — справа/зліва 50/50 як у звичайному, так і у повноекранному режимі) ── */}
           <div className="min-w-0 flex-1 h-full flex flex-col">
             {(() => {
               const totalTiles = roster.length + hunters.length + Object.keys(auxStreams).length;
               const isTwoPeople = totalTiles === 2 || filled === 2;
-              const isTwoInFull = isFull && isTwoPeople;
+              const fillTile = isTwoPeople && (isFull || isPortrait);
+
+              const gridLayoutClass = (() => {
+                if (isTwoPeople) {
+                  if (isPortrait) {
+                    // Вертикальна орієнтація: зверху та знизу, рівномірно заповнюючи висоту
+                    return isFull
+                      ? "grid-cols-1 grid-rows-2 h-[calc(100dvh-130px)] sm:h-[calc(100dvh-150px)] max-h-full w-full"
+                      : "grid-cols-1 grid-rows-2 h-[calc(100dvh-220px)] min-h-[480px] max-h-[760px] sm:min-h-[540px] w-full";
+                  } else {
+                    // Горизонтальна орієнтація: зліва та справа
+                    return isFull
+                      ? "grid-cols-2 grid-rows-1 h-[calc(100dvh-130px)] sm:h-[calc(100dvh-150px)] max-h-full w-full"
+                      : "grid-cols-2 sm:grid-cols-2";
+                  }
+                }
+                if (isFull) {
+                  return "grid-cols-1 sm:grid-cols-2";
+                }
+                if (filled === 1) {
+                  return "grid-cols-1 max-w-xl mx-auto";
+                }
+                return "grid-cols-1 sm:grid-cols-2";
+              })();
 
               return (
-                <div
-                  className={`grid gap-2.5 sm:gap-3 ${
-                    isTwoInFull
-                      ? isPortrait
-                        ? "grid-cols-1 grid-rows-2 h-[calc(100dvh-130px)] sm:h-[calc(100dvh-150px)] max-h-full portrait:grid-cols-1 portrait:grid-rows-2 landscape:grid-cols-2 landscape:grid-rows-1"
-                        : "grid-cols-2 grid-rows-1 h-[calc(100dvh-130px)] sm:h-[calc(100dvh-150px)] max-h-full portrait:grid-cols-1 portrait:grid-rows-2 landscape:grid-cols-2 landscape:grid-rows-1"
-                      : isFull
-                      ? "grid-cols-1 sm:grid-cols-2"
-                      : filled === 1
-                      ? "grid-cols-1 max-w-xl mx-auto"
-                      : "grid-cols-1 sm:grid-cols-2"
-                  }`}
-                >
+                <div className={`grid gap-2.5 sm:gap-3 ${gridLayoutClass}`}>
                   {/* реальні учасники (mesh P2P) */}
                   {roster.map((m) => {
                     const self = netRef.current?.myId === m.id;
@@ -826,7 +837,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
                         switchCamLabel={t("video.switchCam")}
                         onKick={isHost && !self ? () => netRef.current?.kick(m.id) : undefined}
                         kickLabel={t("room.kick")}
-                        fillHeight={isTwoInFull}
+                        fillHeight={fillTile}
                       />
                     ) : (
                       <div key={m.id} className="aspect-[4/3] rounded-xl border border-dashed border-[var(--c-line2)] grid place-items-center bg-[var(--c-bg2)]">
@@ -836,7 +847,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
                   })}
                   {/* випадкові гості — реальні люди з пулу рулетки */}
                   {hunters.map((g) => (
-                    <div key={g.id} className={`relative ${isTwoInFull ? "h-full min-h-0 flex-1" : ""}`}>
+                    <div key={g.id} className={`relative ${fillTile ? "h-full min-h-0 flex-1" : ""}`}>
                       <Tile
                         stream={g.stream}
                         name={g.name}
@@ -844,7 +855,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
                         badgeTone="mint"
                         onKick={isHost ? () => kickHunter(g.id) : undefined}
                         kickLabel={t("room.kick")}
-                        fillHeight={isTwoInFull}
+                        fillHeight={fillTile}
                       />
                       {isHost && (
                         <button
@@ -868,7 +879,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
                       badge={t("room.randomBadge")}
                       badgeTone="mint"
                       live
-                      fillHeight={isTwoInFull}
+                      fillHeight={fillTile}
                     />
                   ))}
                 </div>
