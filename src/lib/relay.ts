@@ -123,7 +123,7 @@ export type RoomSource = {
   facingMode?: "user" | "environment";
 };
 
-/* Допоміжна функція малювання відео з правильним збереженням пропорцій (cover/contain) */
+/* Допоміжна функція малювання відео з правильним збереженням пропорцій (contain за замовчуванням для запобігання обрізці) */
 function drawFittedVideo(
   ctx: CanvasRenderingContext2D,
   video: HTMLVideoElement,
@@ -131,40 +131,70 @@ function drawFittedVideo(
   y: number,
   w: number,
   h: number,
-  mirror: boolean = false
+  mirror: boolean = false,
+  fit: "contain" | "cover" = "contain"
 ) {
   const vw = video.videoWidth || 640;
   const vh = video.videoHeight || 480;
   const targetRatio = w / h;
   const videoRatio = vw / vh;
 
-  let sx = 0,
-    sy = 0,
-    sw = vw,
-    sh = vh;
-
-  if (videoRatio > targetRatio) {
-    // Відео ширше за слот — обрізаємо боки
-    sw = vh * targetRatio;
-    sx = (vw - sw) / 2;
-  } else {
-    // Відео вище за слот — обрізаємо зверху/знизу
-    sh = vw / targetRatio;
-    sy = (vh - sh) / 2;
-  }
-
   ctx.save();
   ctx.beginPath();
   ctx.rect(x, y, w, h);
   ctx.clip();
 
-  if (mirror) {
-    ctx.translate(x + w, y);
-    ctx.scale(-1, 1);
-    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
+  // Чистий чорний фон
+  ctx.fillStyle = "#0c0a09";
+  ctx.fillRect(x, y, w, h);
+
+  if (fit === "contain") {
+    // Повний кадр без обрізки зображення
+    let dw = w;
+    let dh = h;
+    let dx = x;
+    let dy = y;
+
+    if (videoRatio > targetRatio) {
+      dh = w / videoRatio;
+      dy = y + (h - dh) / 2;
+    } else {
+      dw = h * videoRatio;
+      dx = x + (w - dw) / 2;
+    }
+
+    if (mirror) {
+      ctx.translate(dx + dw, dy);
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, 0, 0, vw, vh, 0, 0, dw, dh);
+    } else {
+      ctx.drawImage(video, 0, 0, vw, vh, dx, dy, dw, dh);
+    }
   } else {
-    ctx.drawImage(video, sx, sy, sw, sh, x, y, w, h);
+    let sx = 0,
+      sy = 0,
+      sw = vw,
+      sh = vh;
+
+    if (videoRatio > targetRatio) {
+      // Відео ширше за слот — обрізаємо боки
+      sw = vh * targetRatio;
+      sx = (vw - sw) / 2;
+    } else {
+      // Відео вище за слот — обрізаємо зверху/знизу
+      sh = vw / targetRatio;
+      sy = (vh - sh) / 2;
+    }
+
+    if (mirror) {
+      ctx.translate(x + w, y);
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
+    } else {
+      ctx.drawImage(video, sx, sy, sw, sh, x, y, w, h);
+    }
   }
+
   ctx.restore();
 }
 

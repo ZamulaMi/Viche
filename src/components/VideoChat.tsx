@@ -5,6 +5,7 @@ import type { FacingMode, LocalMedia } from "../lib/rtc";
 import { enterFullscreen, exitFullscreen, isNativeFullscreen } from "../lib/fullscreen";
 import { useI18n } from "../i18n";
 import {
+  IconAspect,
   IconCam,
   IconCamOff,
   IconChat,
@@ -66,6 +67,7 @@ export default function VideoChat({
   const [speaking, setSpeaking] = useState(false);
   const [cool, setCool] = useState(false);
   const [isFull, setIsFull] = useState(false);
+  const [videoFit, setVideoFit] = useState<"contain" | "cover">("contain");
   const [facingMode, setFacingMode] = useState<FacingMode>(localMedia?.facingMode ?? "user");
   const [switchingCam, setSwitchingCam] = useState(false);
 
@@ -328,7 +330,7 @@ export default function VideoChat({
           : "absolute inset-0 bg-black overflow-visible"
       }`}
     >
-      {/* remote: відео займає максимальну доступну площу */}
+      {/* remote: відео займає максимальну доступну площу без обрізки */}
       <video
         ref={remoteRef}
         autoPlay
@@ -339,7 +341,9 @@ export default function VideoChat({
             onOrient?.(v.videoWidth < v.videoHeight ? "port" : "land");
           }
         }}
-        className="absolute inset-0 w-full h-full object-cover bg-black"
+        className={`absolute inset-0 w-full h-full ${
+          videoFit === "cover" ? "object-cover" : "object-contain"
+        } bg-black transition-all duration-200`}
       />
 
       {/* верхня панель: статус + пір */}
@@ -382,14 +386,14 @@ export default function VideoChat({
       </div>
 
       {/* локальне відео (PiP) */}
-      <div className="absolute right-2 sm:right-3 bottom-14 sm:bottom-20 w-24 sm:w-36 md:w-44 aspect-[4/3] rounded-lg overflow-hidden border border-[var(--c-line2)] shadow-[var(--c-shadow)] z-20 bg-[var(--c-bg2)]">
+      <div className="absolute right-2 sm:right-3 bottom-14 sm:bottom-20 w-24 sm:w-36 md:w-44 aspect-[4/3] rounded-lg overflow-hidden border border-[var(--c-line2)] shadow-[var(--c-shadow)] z-20 bg-black">
         {localMedia?.isReal ? (
           <video
             ref={localRef}
             autoPlay
             playsInline
             muted
-            className={`w-full h-full object-cover bg-[var(--c-bg2)] transition-transform duration-300 ${
+            className={`w-full h-full object-contain bg-black transition-transform duration-300 ${
               facingMode === "environment" ? "scale-x-100" : "-scale-x-100"
             }`}
           />
@@ -511,6 +515,22 @@ export default function VideoChat({
                 {unread}
               </span>
             )}
+          </button>
+          <button
+            className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none inline-flex ${
+              videoFit === "cover"
+                ? "!text-[var(--c-mint)] !border-[color-mix(in_srgb,var(--c-mint)_50%,transparent)] bg-[color-mix(in_srgb,var(--c-mint)_15%,transparent)]"
+                : ""
+            }`}
+            onClick={() => {
+              const nextFit = videoFit === "contain" ? "cover" : "contain";
+              setVideoFit(nextFit);
+              onToast(nextFit === "cover" ? t("video.fitCover") : t("video.fitContain"), "ok");
+            }}
+            title={`${t("video.fit")} (${videoFit === "contain" ? t("video.fitContain") : t("video.fitCover")})`}
+            aria-label={t("video.fit")}
+          >
+            <IconAspect className="w-4 h-4 sm:w-5 sm:h-5" />
           </button>
           <button
             className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none inline-flex ${isFull ? "!text-[var(--c-amber)] !border-[color-mix(in_srgb,var(--c-amber)_50%,transparent)] bg-[color-mix(in_srgb,var(--c-amber)_15%,transparent)]" : ""}`}

@@ -167,10 +167,9 @@ async function getCameraDevices(): Promise<{
 
 const THERMAL_SAFE_VIDEO = (mode?: FacingMode, deviceId?: string) => ({
   ...(deviceId ? { deviceId: { exact: deviceId } } : mode ? { facingMode: { ideal: mode } } : {}),
-  width: { ideal: 640, max: 960 },
-  height: { ideal: 480, max: 720 },
+  width: { ideal: 1280, max: 1920 },
+  height: { ideal: 720, max: 1080 },
   frameRate: { ideal: 24, max: 30 },
-  aspectRatio: { ideal: 4 / 3 },
 });
 
 const THERMAL_SAFE_AUDIO = {
@@ -190,8 +189,8 @@ async function acquireCameraTrack(
     const stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: { exact: targetMode },
-        width: { ideal: 640, max: 960 },
-        height: { ideal: 480, max: 720 },
+        width: { ideal: 1280, max: 1920 },
+        height: { ideal: 720, max: 1080 },
         frameRate: { ideal: 24, max: 30 },
       },
     });

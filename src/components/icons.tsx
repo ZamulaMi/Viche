@@ -101,6 +101,11 @@ export const IconExitFull = ({ className }: P) => (
     <path d="M4 14h6v6" /><path d="m10 14-7 7" /><path d="M20 10h-6V4" /><path d="m14 10 7-7" />
   </S>
 );
+export const IconAspect = ({ className }: P) => (
+  <S className={className}>
+    <rect x="3" y="3" width="18" height="18" rx="2" /><path d="M9 3v18" /><path d="M15 3v18" />
+  </S>
+);
 export const IconClose = ({ className }: P) => (
   <S className={className}>
     <path d="M18 6 6 18" /><path d="m6 6 12 12" />

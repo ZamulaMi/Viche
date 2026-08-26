@@ -150,9 +150,7 @@ function Tile({
         autoPlay
         playsInline
         muted={muted}
-        className={`absolute inset-0 w-full h-full ${
-          fillHeight ? "object-cover" : "object-contain"
-        } transition-transform duration-300 ${
+        className={`absolute inset-0 w-full h-full object-contain transition-transform duration-300 ${
           isSelf && facingMode !== "environment" ? "-scale-x-100" : "scale-x-100"
         }`}
       />
