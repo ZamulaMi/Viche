@@ -16,6 +16,8 @@ import { enterFullscreen, exitFullscreen, isNativeFullscreen } from "../lib/full
 import { useI18n } from "../i18n";
 import { useScramble } from "../lib/hooks";
 import {
+  IconCam,
+  IconCamOff,
   IconCheck,
   IconClose,
   IconCopy,
@@ -23,10 +25,12 @@ import {
   IconExitFull,
   IconFull,
   IconLink,
+  IconMic,
   IconMicOff,
   IconPlus,
   IconRooms,
   IconSend,
+  IconSwitchCamera,
   IconUserPlus,
 } from "./icons";
 
@@ -79,6 +83,11 @@ function Tile({
   badgeTone = "mint",
   muted,
   live,
+  isSelf,
+  facingMode = "user",
+  onSwitchCam,
+  switchingCam,
+  switchCamLabel,
   onKick,
   kickLabel,
 }: {
@@ -89,6 +98,11 @@ function Tile({
   muted?: boolean;
   /** пульсуючий live-індикатор у бейджі (рельатрансляція) */
   live?: boolean;
+  isSelf?: boolean;
+  facingMode?: "user" | "environment";
+  onSwitchCam?: () => void;
+  switchingCam?: boolean;
+  switchCamLabel?: string;
   onKick?: () => void;
   kickLabel?: string;
 }) {
@@ -116,20 +130,43 @@ function Tile({
         : "text-[var(--c-faint)] border-[var(--c-line2)]";
   return (
     <div className={`group relative w-full ${port ? "aspect-[3/4] max-w-[300px] mx-auto" : "aspect-[4/3]"} rounded-xl overflow-hidden border border-[var(--c-line)] bg-black`}>
-      <video ref={ref} autoPlay playsInline muted={muted} className="absolute inset-0 w-full h-full object-contain" />
-      <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 px-3 py-2 bg-gradient-to-t from-black/75 to-transparent">
+      <video
+        ref={ref}
+        autoPlay
+        playsInline
+        muted={muted}
+        className={`absolute inset-0 w-full h-full object-contain transition-transform duration-300 ${
+          isSelf && facingMode !== "environment" ? "-scale-x-100" : "scale-x-1"
+        }`}
+      />
+      <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 px-3 py-2 bg-gradient-to-t from-black/75 to-transparent z-10">
         <span className="text-[13px] font-700 text-white truncate">{name}</span>
         {muted && <IconMicOff className="w-3.5 h-3.5 text-white/70 flex-none" />}
       </div>
       {badge && (
-        <span className={`absolute top-2 left-2 font-mono text-[10px] px-2 py-0.5 rounded-md border bg-black/55 backdrop-blur-sm flex items-center gap-1.5 ${tone}`}>
+        <span className={`absolute top-2 left-2 font-mono text-[10px] px-2 py-0.5 rounded-md border bg-black/55 backdrop-blur-sm flex items-center gap-1.5 z-10 ${tone}`}>
           {live && <span className="w-1.5 h-1.5 rounded-full bg-current animate-[vblink_1.4s_ease-in-out_infinite]" />}
           {badge}
         </span>
       )}
+      {onSwitchCam && (
+        <button
+          type="button"
+          className="absolute top-2 right-2 z-20 p-1.5 rounded-lg bg-black/60 hover:bg-[var(--c-amber)] hover:text-black backdrop-blur-md border border-[var(--c-line2)] text-[var(--c-amber)] transition-all shadow-md active:scale-90"
+          onClick={(e) => {
+            e.stopPropagation();
+            onSwitchCam();
+          }}
+          disabled={switchingCam}
+          title={switchCamLabel || "Switch camera"}
+          aria-label={switchCamLabel || "Switch camera"}
+        >
+          <IconSwitchCamera className={`w-4 h-4 ${switchingCam ? "animate-spin" : ""}`} />
+        </button>
+      )}
       {onKick && (
         <button
-          className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity grid place-items-center w-8 h-8 rounded-lg bg-black/60 border border-[color-mix(in_srgb,var(--c-red)_55%,transparent)] text-[var(--c-red)] hover:bg-[color-mix(in_srgb,var(--c-red)_18%,black)]"
+          className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity grid place-items-center w-8 h-8 rounded-lg bg-black/60 border border-[color-mix(in_srgb,var(--c-red)_55%,transparent)] text-[var(--c-red)] hover:bg-[color-mix(in_srgb,var(--c-red)_18%,black)] z-20"
           onClick={onKick}
           title={kickLabel}
           aria-label={kickLabel}
@@ -176,7 +213,39 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   const [draft, setDraft] = useState("");
   const [recents, setRecents] = useState<StoredRoom[]>(loadRecent);
   const [isFull, setIsFull] = useState(false);
+  const [micOn, setMicOn] = useState(true);
+  const [camOn, setCamOn] = useState(true);
+  const [switchingCam, setSwitchingCam] = useState(false);
   const roomBoxRef = useRef<HTMLDivElement>(null);
+
+  const toggleMic = () => {
+    setMicOn((v) => {
+      localMedia?.stream.getAudioTracks().forEach((tr) => (tr.enabled = v ? false : true));
+      return !v;
+    });
+  };
+  const toggleCam = () => {
+    setCamOn((v) => {
+      localMedia?.stream.getVideoTracks().forEach((tr) => (tr.enabled = v ? false : true));
+      return !v;
+    });
+  };
+
+  const handleSwitchCam = async () => {
+    if (!localMedia?.isReal || !localMedia?.switchCamera || switchingCam) return;
+    setSwitchingCam(true);
+    try {
+      const newMode = await localMedia.switchCamera();
+      onToast(newMode === "environment" ? t("video.camBack") : t("video.camFront"), "ok");
+      if (netRef.current) {
+        netRef.current.updateStream(localMedia.stream);
+      }
+    } catch {
+      onToast(t("toast.noMultiCam"), "warn");
+    } finally {
+      setSwitchingCam(false);
+    }
+  };
 
   const netRef = useRef<RoomNet | null>(null);
   const creatorRef = useRef(false);
@@ -567,9 +636,44 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
               {iceInfo}
             </span>
           )}
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex flex-wrap items-center gap-1.5 sm:gap-2">
             <button
-              className={`btn btn-icon min-h-[40px] min-w-[40px] !py-2 !px-2.5 sm:!px-3 ${
+              className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[40px] sm:min-w-[40px] !p-2 ${
+                !micOn ? "!text-[var(--c-red)] !border-[color-mix(in_srgb,var(--c-red)_50%,transparent)]" : ""
+              }`}
+              onClick={toggleMic}
+              title={t("video.mic")}
+              aria-label={t("video.mic")}
+            >
+              {micOn ? <IconMic className="w-4 h-4 sm:w-4.5 sm:h-4.5" /> : <IconMicOff className="w-4 h-4 sm:w-4.5 sm:h-4.5" />}
+            </button>
+            <button
+              className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[40px] sm:min-w-[40px] !p-2 ${
+                !camOn ? "!text-[var(--c-red)] !border-[color-mix(in_srgb,var(--c-red)_50%,transparent)]" : ""
+              }`}
+              onClick={toggleCam}
+              title={t("video.cam")}
+              aria-label={t("video.cam")}
+            >
+              {camOn ? <IconCam className="w-4 h-4 sm:w-4.5 sm:h-4.5" /> : <IconCamOff className="w-4 h-4 sm:w-4.5 sm:h-4.5" />}
+            </button>
+            <button
+              className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[40px] sm:min-w-[40px] !p-2 ${
+                !localMedia?.hasCam || !camOn ? "opacity-40 cursor-not-allowed" : ""
+              } ${
+                localMedia?.facingMode === "environment"
+                  ? "!text-[var(--c-mint)] !border-[color-mix(in_srgb,var(--c-mint)_50%,transparent)] bg-[color-mix(in_srgb,var(--c-mint)_15%,transparent)]"
+                  : ""
+              }`}
+              onClick={handleSwitchCam}
+              disabled={!localMedia?.hasCam || !camOn || switchingCam}
+              title={`${t("video.switchCam")} (${localMedia?.facingMode === "environment" ? t("video.camBack") : t("video.camFront")})`}
+              aria-label={t("video.switchCam")}
+            >
+              <IconSwitchCamera className={`w-4 h-4 sm:w-4.5 sm:h-4.5 ${switchingCam ? "animate-spin" : ""}`} />
+            </button>
+            <button
+              className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[40px] sm:min-w-[40px] !py-2 !px-2.5 sm:!px-3 ${
                 isFull
                   ? "!text-[var(--c-amber)] !border-[color-mix(in_srgb,var(--c-amber)_50%,transparent)] bg-[color-mix(in_srgb,var(--c-amber)_15%,transparent)]"
                   : ""
@@ -580,9 +684,9 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
             >
               {isFull ? <IconExitFull className="w-4 h-4 sm:w-4.5 sm:h-4.5" /> : <IconFull className="w-4 h-4 sm:w-4.5 sm:h-4.5" />}
             </button>
-            <button className="btn btn-red !py-2 !px-3.5 sm:!px-4 !text-xs sm:!text-sm min-h-[40px]" onClick={leaveRoom}>
+            <button className="btn btn-red !py-2 !px-3 sm:!px-4 !text-xs sm:!text-sm min-h-[38px] sm:min-h-[40px]" onClick={leaveRoom}>
               <IconEnd className="w-4 h-4" />
-              {t("room.leave")}
+              <span className="hidden sm:inline">{t("room.leave")}</span>
             </button>
           </div>
         </div>
@@ -603,6 +707,11 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
                     badge={self ? t("room.you") : m.id === netRef.current?.hostId ? t("room.admin") : "p2p"}
                     badgeTone={self ? "amber" : "mint"}
                     muted={self}
+                    isSelf={self}
+                    facingMode={self ? localMedia?.facingMode : "user"}
+                    onSwitchCam={self && localMedia?.hasCam ? handleSwitchCam : undefined}
+                    switchingCam={switchingCam}
+                    switchCamLabel={t("video.switchCam")}
                     onKick={isHost && !self ? () => netRef.current?.kick(m.id) : undefined}
                     kickLabel={t("room.kick")}
                   />

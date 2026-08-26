@@ -134,26 +134,125 @@ export function makeCanvasStream(label: string, hue: number): CanvasCtl {
   };
 }
 
-export type LocalMedia = CanvasCtl & { stream: MediaStream; hasCam: boolean };
+export type FacingMode = "user" | "environment";
 
-export async function getLocalStream(): Promise<LocalMedia> {
+export type LocalMedia = CanvasCtl & {
+  stream: MediaStream;
+  hasCam: boolean;
+  facingMode: FacingMode;
+  switchCamera: (target?: FacingMode) => Promise<FacingMode>;
+};
+
+export async function getLocalStream(initialFacing: FacingMode = "user"): Promise<LocalMedia> {
+  let currentFacing: FacingMode = initialFacing;
+
   try {
     // горизонтальна камера → 4:3; телефон у вертикалі сам віддасть 3:4
     const s = await navigator.mediaDevices.getUserMedia({
       video: {
+        facingMode: { ideal: currentFacing },
         width: { ideal: 640 },
         height: { ideal: 480 },
         aspectRatio: { ideal: 4 / 3 },
       },
       audio: true,
     });
-    return {
+
+    const localObj: LocalMedia = {
       stream: s,
       hasCam: true,
       isReal: true,
+      facingMode: currentFacing,
       setSpeaking: () => {},
       close: () => s.getTracks().forEach((tr) => tr.stop()),
+      switchCamera: async (target?: FacingMode) => {
+        const nextMode: FacingMode = target ?? (currentFacing === "user" ? "environment" : "user");
+        let newVideoStream: MediaStream | null = null;
+
+        // 1. Спроба з точним facingMode
+        try {
+          newVideoStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { exact: nextMode },
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+              aspectRatio: { ideal: 4 / 3 },
+            },
+          });
+        } catch {
+          // 2. Спроба з ideal facingMode
+          try {
+            newVideoStream = await navigator.mediaDevices.getUserMedia({
+              video: {
+                facingMode: { ideal: nextMode },
+                width: { ideal: 640 },
+                height: { ideal: 480 },
+                aspectRatio: { ideal: 4 / 3 },
+              },
+            });
+          } catch {
+            // 3. Спроба перелічити відеопристрої та обрати альтернативну камеру
+            try {
+              const devices = await navigator.mediaDevices.enumerateDevices();
+              const videoInputs = devices.filter((d) => d.kind === "videoinput");
+              const currentTrack = s.getVideoTracks()[0];
+              const curId = currentTrack?.getSettings()?.deviceId;
+              const nextDevice =
+                videoInputs.find((d) => {
+                  const lbl = d.label.toLowerCase();
+                  if (nextMode === "environment") {
+                    return (
+                      lbl.includes("back") ||
+                      lbl.includes("rear") ||
+                      lbl.includes("environment") ||
+                      lbl.includes("основн") ||
+                      lbl.includes("задн")
+                    );
+                  }
+                  return (
+                    lbl.includes("front") ||
+                    lbl.includes("user") ||
+                    lbl.includes("selfie") ||
+                    lbl.includes("передн") ||
+                    lbl.includes("фронт")
+                  );
+                }) || videoInputs.find((d) => curId && d.deviceId !== curId) || videoInputs[0];
+
+              if (nextDevice && nextDevice.deviceId !== curId) {
+                newVideoStream = await navigator.mediaDevices.getUserMedia({
+                  video: {
+                    deviceId: { exact: nextDevice.deviceId },
+                    width: { ideal: 640 },
+                    height: { ideal: 480 },
+                    aspectRatio: { ideal: 4 / 3 },
+                  },
+                });
+              }
+            } catch {
+              /* noop */
+            }
+          }
+        }
+
+        if (!newVideoStream || newVideoStream.getVideoTracks().length === 0) {
+          throw new Error("No alternative video camera found");
+        }
+
+        const newVideoTrack = newVideoStream.getVideoTracks()[0];
+        const oldTracks = s.getVideoTracks();
+        oldTracks.forEach((tr) => {
+          tr.stop();
+          s.removeTrack(tr);
+        });
+
+        s.addTrack(newVideoTrack);
+        currentFacing = nextMode;
+        localObj.facingMode = nextMode;
+        return nextMode;
+      },
     };
+
+    return localObj;
   } catch {
     try {
       // Спроба отримати хоча б мікрофон, якщо відеокамера зайнята чи відхилена
@@ -167,15 +266,26 @@ export async function getLocalStream(): Promise<LocalMedia> {
         stream: combined,
         hasCam: false,
         isReal: true,
+        facingMode: "user",
         setSpeaking: c.setSpeaking,
         close: () => {
           c.close();
           audioStream.getTracks().forEach((tr) => tr.stop());
         },
+        switchCamera: async () => {
+          throw new Error("No real camera available");
+        },
       };
     } catch {
       const c = makeCanvasStream("TI", 42);
-      return { ...c, hasCam: false };
+      return {
+        ...c,
+        hasCam: false,
+        facingMode: "user",
+        switchCamera: async () => {
+          throw new Error("No real camera available");
+        },
+      };
     }
   }
 }

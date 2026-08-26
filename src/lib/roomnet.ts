@@ -97,6 +97,28 @@ export class RoomNet {
     return this.roster;
   }
 
+  updateStream(newStream: MediaStream) {
+    this.stream = newStream;
+    const videoTrack = newStream.getVideoTracks()[0];
+    const audioTrack = newStream.getAudioTracks()[0];
+    this.calls.forEach((call) => {
+      if (call.peerConnection) {
+        try {
+          const senders = call.peerConnection.getSenders();
+          senders.forEach((sender) => {
+            if (sender.track?.kind === "video" && videoTrack) {
+              void sender.replaceTrack(videoTrack);
+            } else if (sender.track?.kind === "audio" && audioTrack) {
+              void sender.replaceTrack(audioTrack);
+            }
+          });
+        } catch {
+          /* noop */
+        }
+      }
+    });
+  }
+
   /* ── спроба стати хостом; якщо ID зайнятий — приєднуємось гостем ── */
   private tryHost() {
     const p = new Peer(this.hostId, { ...defaultPeerOptions });

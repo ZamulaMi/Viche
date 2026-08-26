@@ -57,6 +57,15 @@ export const IconCamOff = ({ className }: P) => (
     <path d="M8.5 6h4.5a2.5 2.5 0 0 1 2.5 2.5V10l6-3.6v11.2l-2-1.2M15.5 15.5v0A2.5 2.5 0 0 1 13 18H5a2.5 2.5 0 0 1-2.5-2.5v-7A2.5 2.5 0 0 1 5 6h.5" /><path d="m3 3 18 18" />
   </S>
 );
+export const IconSwitchCamera = ({ className }: P) => (
+  <S className={className}>
+    <path d="M11 19H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5" />
+    <path d="M13 5h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5" />
+    <circle cx="12" cy="12" r="3" />
+    <path d="m18 22-3-3 3-3" />
+    <path d="m6 2 3 3-3 3" />
+  </S>
+);
 export const IconNext = ({ className }: P) => (
   <S className={className}>
     <path d="m5 4 10 8-10 8V4Z" /><path d="M19 5v14" />

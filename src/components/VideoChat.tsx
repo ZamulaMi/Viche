@@ -17,6 +17,7 @@ import {
   IconMicOff,
   IconNext,
   IconSend,
+  IconSwitchCamera,
 } from "./icons";
 
 type Msg = { id: number; from: "peer" | "you" | "sys" | "warn"; text: string; time: string };
@@ -63,6 +64,7 @@ export default function VideoChat({
   const [speaking, setSpeaking] = useState(false);
   const [cool, setCool] = useState(false);
   const [isFull, setIsFull] = useState(false);
+  const [switchingCam, setSwitchingCam] = useState(false);
 
   const peerLang = peer.langs.includes("uk") ? "uk" : "en";
 
@@ -253,6 +255,23 @@ export default function VideoChat({
     });
   };
 
+  const handleSwitchCam = async () => {
+    if (!localMedia?.isReal || !localMedia?.switchCamera || switchingCam) return;
+    setSwitchingCam(true);
+    try {
+      const newMode = await localMedia.switchCamera();
+      onToast(newMode === "environment" ? t("video.camBack") : t("video.camFront"), "ok");
+      if (localRef.current) {
+        localRef.current.srcObject = localMedia.stream;
+        localRef.current.play().catch(() => {});
+      }
+    } catch {
+      onToast(t("toast.noMultiCam"), "warn");
+    } finally {
+      setSwitchingCam(false);
+    }
+  };
+
   const enterFs = async () => {
     setIsFull(true);
     await enterFullscreen(boxRef.current);
@@ -334,16 +353,50 @@ export default function VideoChat({
       </div>
 
       {/* локальне відео (PiP) */}
-      <div className="absolute right-2 sm:right-3 bottom-14 sm:bottom-20 w-22 sm:w-36 md:w-44 aspect-[4/3] rounded-lg overflow-hidden border border-[var(--c-line2)] shadow-[var(--c-shadow)] z-20 bg-[var(--c-bg2)]">
+      <div className="absolute right-2 sm:right-3 bottom-14 sm:bottom-20 w-24 sm:w-36 md:w-44 aspect-[4/3] rounded-lg overflow-hidden border border-[var(--c-line2)] shadow-[var(--c-shadow)] z-20 bg-[var(--c-bg2)]">
         {localMedia?.isReal ? (
-          <video ref={localRef} autoPlay playsInline muted className="w-full h-full object-contain bg-[var(--c-bg2)]" />
+          <video
+            ref={localRef}
+            autoPlay
+            playsInline
+            muted
+            className={`w-full h-full object-contain bg-[var(--c-bg2)] transition-transform duration-300 ${
+              localMedia?.facingMode === "environment" ? "scale-x-1" : "-scale-x-100"
+            }`}
+          />
         ) : (
           <div className="w-full h-full grid place-items-center">
             <span className="font-display text-xl sm:text-2xl text-[var(--c-amber)]">TI</span>
           </div>
         )}
-        {!camOn && <div className="absolute inset-0 bg-[var(--c-bg)] grid place-items-center"><IconCamOff className="w-5 h-5 sm:w-6 sm:h-6 text-[var(--c-faint)]" /></div>}
-        <span className="absolute top-1 left-1.5 font-mono text-[9px] sm:text-[10px] tracking-widest text-[var(--c-mint)]">{t("video.you")}</span>
+        {!camOn && (
+          <div className="absolute inset-0 bg-[var(--c-bg)] grid place-items-center">
+            <IconCamOff className="w-5 h-5 sm:w-6 sm:h-6 text-[var(--c-faint)]" />
+          </div>
+        )}
+        <div className="absolute top-1 left-1.5 flex items-center gap-1 z-30">
+          <span className="font-mono text-[9px] sm:text-[10px] tracking-widest text-[var(--c-mint)]">{t("video.you")}</span>
+          {localMedia?.hasCam && (
+            <span className="font-mono text-[8px] sm:text-[9px] px-1 py-0.2 rounded bg-black/60 text-[var(--c-faint)] uppercase">
+              {localMedia.facingMode === "environment" ? "rear" : "front"}
+            </span>
+          )}
+        </div>
+        {localMedia?.hasCam && camOn && (
+          <button
+            type="button"
+            className="absolute top-1 right-1 p-1 sm:p-1.5 rounded-md bg-[color-mix(in_srgb,var(--c-bg)_80%,transparent)] hover:bg-[var(--c-amber)] hover:text-black backdrop-blur-md border border-[var(--c-line2)] text-[var(--c-amber)] transition-all z-30 shadow-md active:scale-90"
+            onClick={(e) => {
+              e.stopPropagation();
+              void handleSwitchCam();
+            }}
+            disabled={switchingCam}
+            title={`${t("video.switchCam")} (${t("video.flipHint")})`}
+            aria-label={t("video.switchCam")}
+          >
+            <IconSwitchCamera className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${switchingCam ? "animate-spin" : ""}`} />
+          </button>
+        )}
       </div>
       {!localMedia?.hasCam && (
         <p className="absolute right-2 sm:right-3 bottom-12 sm:bottom-[72px] z-20 font-mono text-[9.5px] sm:text-[10px] text-[var(--c-amber)] bg-[color-mix(in_srgb,var(--c-bg)_78%,transparent)] backdrop-blur-md rounded-md px-1.5 sm:px-2 py-0.5 border border-[var(--c-line)]">
@@ -416,6 +469,21 @@ export default function VideoChat({
             aria-label={t("video.cam")}
           >
             {camOn ? <IconCam className="w-4 h-4 sm:w-5 sm:h-5" /> : <IconCamOff className="w-4 h-4 sm:w-5 sm:h-5" />}
+          </button>
+          <button
+            className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none ${
+              !localMedia?.hasCam || !camOn ? "opacity-40 cursor-not-allowed" : ""
+            } ${
+              localMedia?.facingMode === "environment"
+                ? "!text-[var(--c-mint)] !border-[color-mix(in_srgb,var(--c-mint)_50%,transparent)] bg-[color-mix(in_srgb,var(--c-mint)_15%,transparent)]"
+                : ""
+            }`}
+            onClick={handleSwitchCam}
+            disabled={!localMedia?.hasCam || !camOn || switchingCam}
+            title={`${t("video.switchCam")} (${localMedia?.facingMode === "environment" ? t("video.camBack") : t("video.camFront")})`}
+            aria-label={t("video.switchCam")}
+          >
+            <IconSwitchCamera className={`w-4 h-4 sm:w-5 sm:h-5 ${switchingCam ? "animate-spin" : ""}`} />
           </button>
           <button
             className="btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none relative"
