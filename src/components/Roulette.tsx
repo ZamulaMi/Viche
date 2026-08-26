@@ -203,6 +203,9 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
                 onOrient={setOrient}
                 chat={netRef.current ? { ...netRef.current.chat } : undefined}
                 localMedia={localMedia}
+                onStreamUpdate={(s, track) => {
+                  netRef.current?.updateStream(s, track);
+                }}
                 onLeave={(k) => (k === "next" ? next() : stop())}
                 onReport={() => onToast(t("rep.sent"), "ok")}
                 onToast={onToast}

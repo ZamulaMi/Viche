@@ -136,27 +136,121 @@ export function makeCanvasStream(label: string, hue: number): CanvasCtl {
 
 export type FacingMode = "user" | "environment";
 
+export type SwitchCamResult = {
+  facingMode: FacingMode;
+  stream: MediaStream;
+  videoTrack: MediaStreamTrack;
+};
+
 export type LocalMedia = CanvasCtl & {
   stream: MediaStream;
   hasCam: boolean;
   facingMode: FacingMode;
-  switchCamera: (target?: FacingMode) => Promise<FacingMode>;
+  switchCamera: (target?: FacingMode) => Promise<SwitchCamResult>;
 };
+
+async function acquireVideoTrack(mode: FacingMode, previousTrackId?: string): Promise<MediaStreamTrack> {
+  // 1. Спроба з ideal facingMode
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: mode },
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+        aspectRatio: { ideal: 4 / 3 },
+      },
+    });
+    const tr = stream.getVideoTracks()[0];
+    if (tr) return tr;
+  } catch {
+    /* noop */
+  }
+
+  // 2. Спроба з простим facingMode
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: mode },
+    });
+    const tr = stream.getVideoTracks()[0];
+    if (tr) return tr;
+  } catch {
+    /* noop */
+  }
+
+  // 3. Спроба обрати через enumerateDevices
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoInputs = devices.filter((d) => d.kind === "videoinput");
+    if (videoInputs.length > 0) {
+      let chosen = videoInputs.find((d) => {
+        const lbl = (d.label || "").toLowerCase();
+        if (mode === "environment") {
+          return (
+            lbl.includes("back") ||
+            lbl.includes("rear") ||
+            lbl.includes("environment") ||
+            lbl.includes("основн") ||
+            lbl.includes("задн")
+          );
+        }
+        return (
+          lbl.includes("front") ||
+          lbl.includes("user") ||
+          lbl.includes("selfie") ||
+          lbl.includes("передн") ||
+          lbl.includes("фронт")
+        );
+      });
+
+      if (!chosen && previousTrackId) {
+        chosen = videoInputs.find((d) => d.deviceId && d.deviceId !== previousTrackId);
+      }
+
+      if (!chosen && videoInputs.length > 1) {
+        chosen = mode === "environment" ? videoInputs[videoInputs.length - 1] : videoInputs[0];
+      }
+
+      if (chosen?.deviceId) {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            deviceId: { ideal: chosen.deviceId },
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+          },
+        });
+        const tr = stream.getVideoTracks()[0];
+        if (tr) return tr;
+      }
+    }
+  } catch {
+    /* noop */
+  }
+
+  throw new Error("Could not acquire camera track");
+}
 
 export async function getLocalStream(initialFacing: FacingMode = "user"): Promise<LocalMedia> {
   let currentFacing: FacingMode = initialFacing;
 
   try {
     // горизонтальна камера → 4:3; телефон у вертикалі сам віддасть 3:4
-    const s = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: currentFacing },
-        width: { ideal: 640 },
-        height: { ideal: 480 },
-        aspectRatio: { ideal: 4 / 3 },
-      },
-      audio: true,
-    });
+    let s: MediaStream;
+    try {
+      s = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: currentFacing },
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          aspectRatio: { ideal: 4 / 3 },
+        },
+        audio: true,
+      });
+    } catch {
+      s = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true,
+      });
+    }
 
     const localObj: LocalMedia = {
       stream: s,
@@ -167,88 +261,62 @@ export async function getLocalStream(initialFacing: FacingMode = "user"): Promis
       close: () => s.getTracks().forEach((tr) => tr.stop()),
       switchCamera: async (target?: FacingMode) => {
         const nextMode: FacingMode = target ?? (currentFacing === "user" ? "environment" : "user");
-        let newVideoStream: MediaStream | null = null;
+        const oldVideoTracks = s.getVideoTracks();
+        const oldTrack = oldVideoTracks[0];
+        const oldTrackId = oldTrack?.getSettings()?.deviceId;
 
-        // 1. Спроба з точним facingMode
+        let newVideoTrack: MediaStreamTrack | null = null;
+
         try {
-          newVideoStream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              facingMode: { exact: nextMode },
-              width: { ideal: 640 },
-              height: { ideal: 480 },
-              aspectRatio: { ideal: 4 / 3 },
-            },
-          });
+          newVideoTrack = await acquireVideoTrack(nextMode, oldTrackId);
         } catch {
-          // 2. Спроба з ideal facingMode
-          try {
-            newVideoStream = await navigator.mediaDevices.getUserMedia({
-              video: {
-                facingMode: { ideal: nextMode },
-                width: { ideal: 640 },
-                height: { ideal: 480 },
-                aspectRatio: { ideal: 4 / 3 },
-              },
-            });
-          } catch {
-            // 3. Спроба перелічити відеопристрої та обрати альтернативну камеру
+          // Якщо браузер блокує паралельне відкриття другого сенсора (наприклад, iOS Safari)
+          oldVideoTracks.forEach((tr) => {
             try {
-              const devices = await navigator.mediaDevices.enumerateDevices();
-              const videoInputs = devices.filter((d) => d.kind === "videoinput");
-              const currentTrack = s.getVideoTracks()[0];
-              const curId = currentTrack?.getSettings()?.deviceId;
-              const nextDevice =
-                videoInputs.find((d) => {
-                  const lbl = d.label.toLowerCase();
-                  if (nextMode === "environment") {
-                    return (
-                      lbl.includes("back") ||
-                      lbl.includes("rear") ||
-                      lbl.includes("environment") ||
-                      lbl.includes("основн") ||
-                      lbl.includes("задн")
-                    );
-                  }
-                  return (
-                    lbl.includes("front") ||
-                    lbl.includes("user") ||
-                    lbl.includes("selfie") ||
-                    lbl.includes("передн") ||
-                    lbl.includes("фронт")
-                  );
-                }) || videoInputs.find((d) => curId && d.deviceId !== curId) || videoInputs[0];
+              tr.stop();
+            } catch {
+              /* noop */
+            }
+          });
 
-              if (nextDevice && nextDevice.deviceId !== curId) {
-                newVideoStream = await navigator.mediaDevices.getUserMedia({
-                  video: {
-                    deviceId: { exact: nextDevice.deviceId },
-                    width: { ideal: 640 },
-                    height: { ideal: 480 },
-                    aspectRatio: { ideal: 4 / 3 },
-                  },
-                });
-              }
+          try {
+            newVideoTrack = await acquireVideoTrack(nextMode, oldTrackId);
+          } catch (err2) {
+            // Спроба відновити попередню камеру
+            try {
+              const fallbackTrack = await acquireVideoTrack(currentFacing);
+              s.addTrack(fallbackTrack);
+            } catch {
+              /* noop */
+            }
+            throw err2;
+          }
+        }
+
+        // Зупиняємо старі треки
+        oldVideoTracks.forEach((tr) => {
+          if (tr !== newVideoTrack) {
+            try {
+              tr.stop();
+              s.removeTrack(tr);
             } catch {
               /* noop */
             }
           }
-        }
-
-        if (!newVideoStream || newVideoStream.getVideoTracks().length === 0) {
-          throw new Error("No alternative video camera found");
-        }
-
-        const newVideoTrack = newVideoStream.getVideoTracks()[0];
-        const oldTracks = s.getVideoTracks();
-        oldTracks.forEach((tr) => {
-          tr.stop();
-          s.removeTrack(tr);
         });
 
-        s.addTrack(newVideoTrack);
+        if (!s.getVideoTracks().includes(newVideoTrack)) {
+          s.addTrack(newVideoTrack);
+        }
+
         currentFacing = nextMode;
         localObj.facingMode = nextMode;
-        return nextMode;
+
+        return {
+          facingMode: nextMode,
+          stream: s,
+          videoTrack: newVideoTrack,
+        };
       },
     };
 

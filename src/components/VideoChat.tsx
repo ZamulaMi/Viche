@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Peer } from "../lib/sim";
 import { filterProfanity, now, randomPhrase } from "../lib/sim";
-import type { LocalMedia } from "../lib/rtc";
+import type { FacingMode, LocalMedia } from "../lib/rtc";
 import { enterFullscreen, exitFullscreen, isNativeFullscreen } from "../lib/fullscreen";
 import { useI18n } from "../i18n";
 import {
@@ -31,6 +31,7 @@ type Props = {
   /** реальний текстовий чат (лише для мережевої пари) */
   chat?: { send: (text: string) => void; subscribe: (fn: (text: string) => void) => () => void };
   localMedia: LocalMedia | null;
+  onStreamUpdate?: (stream: MediaStream, videoTrack?: MediaStreamTrack) => void;
   onLeave: (kind: "next" | "end") => void;
   onReport: () => void;
   onToast: (msg: string, kind?: "ok" | "warn") => void;
@@ -45,6 +46,7 @@ export default function VideoChat({
   onOrient,
   chat,
   localMedia,
+  onStreamUpdate,
   onLeave,
   onReport,
   onToast,
@@ -64,6 +66,7 @@ export default function VideoChat({
   const [speaking, setSpeaking] = useState(false);
   const [cool, setCool] = useState(false);
   const [isFull, setIsFull] = useState(false);
+  const [facingMode, setFacingMode] = useState<FacingMode>(localMedia?.facingMode ?? "user");
   const [switchingCam, setSwitchingCam] = useState(false);
 
   const peerLang = peer.langs.includes("uk") ? "uk" : "en";
@@ -88,6 +91,9 @@ export default function VideoChat({
       v.srcObject = localMedia.stream;
       v.onloadedmetadata = () => v.play().catch(() => {});
       v.play().catch(() => {});
+    }
+    if (localMedia?.facingMode) {
+      setFacingMode(localMedia.facingMode);
     }
   }, [localMedia]);
 
@@ -259,10 +265,18 @@ export default function VideoChat({
     if (!localMedia?.isReal || !localMedia?.switchCamera || switchingCam) return;
     setSwitchingCam(true);
     try {
-      const newMode = await localMedia.switchCamera();
+      const res = await localMedia.switchCamera();
+      const newMode = res.facingMode;
+      setFacingMode(newMode);
       onToast(newMode === "environment" ? t("video.camBack") : t("video.camFront"), "ok");
+
+      // Повідомляємо WebRTC з'єднання про новий трек
+      onStreamUpdate?.(res.stream, res.videoTrack);
+
+      // Оновлюємо та перезапускаємо відтворення у локальному PiP-відео
       if (localRef.current) {
-        localRef.current.srcObject = localMedia.stream;
+        localRef.current.srcObject = null;
+        localRef.current.srcObject = res.stream;
         localRef.current.play().catch(() => {});
       }
     } catch {
@@ -361,7 +375,7 @@ export default function VideoChat({
             playsInline
             muted
             className={`w-full h-full object-contain bg-[var(--c-bg2)] transition-transform duration-300 ${
-              localMedia?.facingMode === "environment" ? "scale-x-1" : "-scale-x-100"
+              facingMode === "environment" ? "scale-x-1" : "-scale-x-100"
             }`}
           />
         ) : (
@@ -378,7 +392,7 @@ export default function VideoChat({
           <span className="font-mono text-[9px] sm:text-[10px] tracking-widest text-[var(--c-mint)]">{t("video.you")}</span>
           {localMedia?.hasCam && (
             <span className="font-mono text-[8px] sm:text-[9px] px-1 py-0.2 rounded bg-black/60 text-[var(--c-faint)] uppercase">
-              {localMedia.facingMode === "environment" ? "rear" : "front"}
+              {facingMode === "environment" ? "rear" : "front"}
             </span>
           )}
         </div>

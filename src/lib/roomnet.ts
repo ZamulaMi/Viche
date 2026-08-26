@@ -97,19 +97,28 @@ export class RoomNet {
     return this.roster;
   }
 
-  updateStream(newStream: MediaStream) {
+  updateStream(newStream: MediaStream, newVideoTrack?: MediaStreamTrack) {
     this.stream = newStream;
-    const videoTrack = newStream.getVideoTracks()[0];
+    const videoTrack = newVideoTrack || newStream.getVideoTracks()[0];
     const audioTrack = newStream.getAudioTracks()[0];
     this.calls.forEach((call) => {
+      try {
+        (call as unknown as { localStream?: MediaStream }).localStream = newStream;
+      } catch {
+        /* noop */
+      }
       if (call.peerConnection) {
         try {
           const senders = call.peerConnection.getSenders();
           senders.forEach((sender) => {
-            if (sender.track?.kind === "video" && videoTrack) {
-              void sender.replaceTrack(videoTrack);
-            } else if (sender.track?.kind === "audio" && audioTrack) {
-              void sender.replaceTrack(audioTrack);
+            if (sender.track?.kind === "video" || (!sender.track && videoTrack)) {
+              if (videoTrack) {
+                void sender.replaceTrack(videoTrack).catch(() => {});
+              }
+            } else if (sender.track?.kind === "audio") {
+              if (audioTrack) {
+                void sender.replaceTrack(audioTrack).catch(() => {});
+              }
             }
           });
         } catch {

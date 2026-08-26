@@ -126,22 +126,35 @@ export class RouletteNet {
     return this.chatApi;
   }
 
-  updateStream(newStream: MediaStream) {
+  updateStream(newStream: MediaStream, newVideoTrack?: MediaStreamTrack) {
     this.stream = newStream;
-    if (this.call?.peerConnection) {
+    const videoTrack = newVideoTrack || newStream.getVideoTracks()[0];
+    const audioTrack = newStream.getAudioTracks()[0];
+
+    if (this.call) {
       try {
-        const senders = this.call.peerConnection.getSenders();
-        const videoTrack = newStream.getVideoTracks()[0];
-        const audioTrack = newStream.getAudioTracks()[0];
-        senders.forEach((sender) => {
-          if (sender.track?.kind === "video" && videoTrack) {
-            void sender.replaceTrack(videoTrack);
-          } else if (sender.track?.kind === "audio" && audioTrack) {
-            void sender.replaceTrack(audioTrack);
-          }
-        });
+        (this.call as unknown as { localStream?: MediaStream }).localStream = newStream;
       } catch {
         /* noop */
+      }
+
+      if (this.call.peerConnection) {
+        try {
+          const senders = this.call.peerConnection.getSenders();
+          senders.forEach((sender) => {
+            if (sender.track?.kind === "video" || (!sender.track && videoTrack)) {
+              if (videoTrack) {
+                void sender.replaceTrack(videoTrack).catch(() => {});
+              }
+            } else if (sender.track?.kind === "audio") {
+              if (audioTrack) {
+                void sender.replaceTrack(audioTrack).catch(() => {});
+              }
+            }
+          });
+        } catch {
+          /* noop */
+        }
       }
     }
   }

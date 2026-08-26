@@ -11,7 +11,7 @@ import {
   shortId,
   type RoomId,
 } from "../lib/sim";
-import type { LocalMedia } from "../lib/rtc";
+import type { FacingMode, LocalMedia } from "../lib/rtc";
 import { enterFullscreen, exitFullscreen, isNativeFullscreen } from "../lib/fullscreen";
 import { useI18n } from "../i18n";
 import { useScramble } from "../lib/hooks";
@@ -215,6 +215,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   const [isFull, setIsFull] = useState(false);
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
+  const [facingMode, setFacingMode] = useState<FacingMode>(localMedia?.facingMode ?? "user");
   const [switchingCam, setSwitchingCam] = useState(false);
   const roomBoxRef = useRef<HTMLDivElement>(null);
 
@@ -235,10 +236,11 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
     if (!localMedia?.isReal || !localMedia?.switchCamera || switchingCam) return;
     setSwitchingCam(true);
     try {
-      const newMode = await localMedia.switchCamera();
-      onToast(newMode === "environment" ? t("video.camBack") : t("video.camFront"), "ok");
+      const res = await localMedia.switchCamera();
+      setFacingMode(res.facingMode);
+      onToast(res.facingMode === "environment" ? t("video.camBack") : t("video.camFront"), "ok");
       if (netRef.current) {
-        netRef.current.updateStream(localMedia.stream);
+        netRef.current.updateStream(res.stream, res.videoTrack);
       }
     } catch {
       onToast(t("toast.noMultiCam"), "warn");
@@ -693,7 +695,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
                     badgeTone={self ? "amber" : "mint"}
                     muted={self}
                     isSelf={self}
-                    facingMode={self ? localMedia?.facingMode : "user"}
+                    facingMode={self ? facingMode : "user"}
                     onSwitchCam={self && localMedia?.hasCam ? handleSwitchCam : undefined}
                     switchingCam={switchingCam}
                     switchCamLabel={t("video.switchCam")}
