@@ -298,12 +298,12 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
     return list.slice(0, 2);
   }, [roster, streams, selfStream, localMedia, facingMode, name, t]);
 
-  // Оновлюємо композитор у реальному часі при зміні учасників або потоків
+  // Оновлюємо композитор у реальному часі при зміні учасників, потоків або орієнтації
   useEffect(() => {
     if (compositorRef.current) {
-      compositorRef.current.updateSources(currentSources);
+      compositorRef.current.updateSources(currentSources, isPortrait);
     }
-  }, [currentSources]);
+  }, [currentSources, isPortrait]);
 
   const toggleMic = () => {
     setMicOn((v) => {
@@ -606,9 +606,9 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
 
     // Ініціалізуємо або оновлюємо композитор кімнати (потоки 1 або 2 людей)
     if (!compositorRef.current) {
-      compositorRef.current = new RoomStreamCompositor(currentSources);
+      compositorRef.current = new RoomStreamCompositor(currentSources, isPortrait);
     } else {
-      compositorRef.current.updateSources(currentSources);
+      compositorRef.current.updateSources(currentSources, isPortrait);
     }
     const outboundStream = compositorRef.current.compositeStream;
 

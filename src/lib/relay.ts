@@ -210,11 +210,13 @@ export class RoomStreamCompositor {
   private animId = 0;
   public compositeStream: MediaStream;
   private disposed = false;
+  public isPortrait: boolean = false;
 
-  constructor(initialSources: RoomSource[] = []) {
+  constructor(initialSources: RoomSource[] = [], isPortrait: boolean = false) {
+    this.isPortrait = isPortrait;
     this.canvas = document.createElement("canvas");
-    this.canvas.width = 1280;
-    this.canvas.height = 720;
+    this.canvas.width = isPortrait ? 720 : 1280;
+    this.canvas.height = isPortrait ? 1280 : 720;
     this.ctx = this.canvas.getContext("2d");
 
     try {
@@ -238,12 +240,28 @@ export class RoomStreamCompositor {
     }
     this.compositeStream = new MediaStream(tracks);
 
-    this.updateSources(initialSources);
+    this.updateSources(initialSources, isPortrait);
     this.startLoop();
   }
 
-  updateSources(newSources: RoomSource[]) {
+  setPortrait(isPortrait: boolean) {
     if (this.disposed) return;
+    if (this.isPortrait !== isPortrait) {
+      this.isPortrait = isPortrait;
+      const targetW = isPortrait ? 720 : 1280;
+      const targetH = isPortrait ? 1280 : 720;
+      if (this.canvas.width !== targetW || this.canvas.height !== targetH) {
+        this.canvas.width = targetW;
+        this.canvas.height = targetH;
+      }
+    }
+  }
+
+  updateSources(newSources: RoomSource[], isPortrait?: boolean) {
+    if (this.disposed) return;
+    if (typeof isPortrait === "boolean") {
+      this.setPortrait(isPortrait);
+    }
     this.sources = newSources.slice(0, 2); // підтримуємо 1 або 2 користувачів кімнати
 
     const activeIds = new Set(this.sources.map((s) => s.id));
@@ -370,62 +388,119 @@ export class RoomStreamCompositor {
       // Бейдж імені внизу
       this.drawNameTag(ctx, s0.name, 20, H - 52);
     } else {
-      // 2 користувача у кімнаті: екран ділиться навпіл (50% зліва, 50% справа)
-      const halfW = W / 2;
+      // 2 користувача у кімнаті
       const s0 = validSources[0];
       const s1 = validSources[1];
       const v0 = this.videoEls.get(s0.id);
       const v1 = this.videoEls.get(s1.id);
 
-      // Ліва половина (Користувач 1)
-      if (v0 && v0.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-        const mirror = !!(s0.isSelf && s0.facingMode !== "environment");
-        drawFittedVideo(ctx, v0, 0, 0, halfW, H, mirror);
-      } else {
-        ctx.fillStyle = "#161310";
-        ctx.fillRect(0, 0, halfW, H);
-        ctx.fillStyle = "rgba(235, 178, 95, 0.9)";
-        ctx.font = "700 36px Unbounded, sans-serif";
+      if (this.isPortrait) {
+        // Портретний режим: вертикальне розташування один над одним (50% зверху, 50% знизу)
+        const halfH = H / 2;
+
+        // Верхній слот (Користувач 1)
+        if (v0 && v0.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+          const mirror = !!(s0.isSelf && s0.facingMode !== "environment");
+          drawFittedVideo(ctx, v0, 0, 0, W, halfH, mirror);
+        } else {
+          ctx.fillStyle = "#161310";
+          ctx.fillRect(0, 0, W, halfH);
+          ctx.fillStyle = "rgba(235, 178, 95, 0.9)";
+          ctx.font = "700 36px Unbounded, sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText((s0.name || "K1").slice(0, 2).toUpperCase(), W / 2, halfH / 2 - 12);
+        }
+        this.drawNameTag(ctx, s0.name, 16, halfH - 44);
+
+        // Нижній слот (Користувач 2)
+        if (v1 && v1.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+          const mirror = !!(s1.isSelf && s1.facingMode !== "environment");
+          drawFittedVideo(ctx, v1, 0, halfH, W, halfH, mirror);
+        } else {
+          ctx.fillStyle = "#1c1813";
+          ctx.fillRect(0, halfH, W, halfH);
+          ctx.fillStyle = "rgba(75, 219, 154, 0.9)";
+          ctx.font = "700 36px Unbounded, sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText((s1.name || "K2").slice(0, 2).toUpperCase(), W / 2, halfH + halfH / 2 - 12);
+        }
+        this.drawNameTag(ctx, s1.name, 16, H - 44);
+
+        // Горизонтальна лінія розподілу між верхнім і нижнім учасником
+        ctx.strokeStyle = "rgba(235, 178, 95, 0.7)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, halfH);
+        ctx.lineTo(W, halfH);
+        ctx.stroke();
+
+        // Маленький індикатор кімнати по центру лінії розподілу
+        ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
+        ctx.beginPath();
+        ctx.roundRect(W / 2 - 56, halfH - 13, 112, 26, 6);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.fillStyle = "rgba(235, 178, 95, 0.95)";
+        ctx.font = "600 12px 'JetBrains Mono', monospace";
         ctx.textAlign = "center";
-        ctx.fillText((s0.name || "K1").slice(0, 2).toUpperCase(), halfW / 2, H / 2 - 12);
-      }
-      this.drawNameTag(ctx, s0.name, 16, H - 48);
-
-      // Права половина (Користувач 2)
-      if (v1 && v1.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-        const mirror = !!(s1.isSelf && s1.facingMode !== "environment");
-        drawFittedVideo(ctx, v1, halfW, 0, halfW, H, mirror);
+        ctx.textBaseline = "middle";
+        ctx.fillText("2 УЧАСНИКИ", W / 2, halfH);
       } else {
-        ctx.fillStyle = "#1c1813";
-        ctx.fillRect(halfW, 0, halfW, H);
-        ctx.fillStyle = "rgba(75, 219, 154, 0.9)";
-        ctx.font = "700 36px Unbounded, sans-serif";
+        // Альбомний режим: горизонтальне розташування поруч (50% зліва, 50% справа)
+        const halfW = W / 2;
+
+        // Ліва половина (Користувач 1)
+        if (v0 && v0.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+          const mirror = !!(s0.isSelf && s0.facingMode !== "environment");
+          drawFittedVideo(ctx, v0, 0, 0, halfW, H, mirror);
+        } else {
+          ctx.fillStyle = "#161310";
+          ctx.fillRect(0, 0, halfW, H);
+          ctx.fillStyle = "rgba(235, 178, 95, 0.9)";
+          ctx.font = "700 36px Unbounded, sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText((s0.name || "K1").slice(0, 2).toUpperCase(), halfW / 2, H / 2 - 12);
+        }
+        this.drawNameTag(ctx, s0.name, 16, H - 48);
+
+        // Права половина (Користувач 2)
+        if (v1 && v1.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+          const mirror = !!(s1.isSelf && s1.facingMode !== "environment");
+          drawFittedVideo(ctx, v1, halfW, 0, halfW, H, mirror);
+        } else {
+          ctx.fillStyle = "#1c1813";
+          ctx.fillRect(halfW, 0, halfW, H);
+          ctx.fillStyle = "rgba(75, 219, 154, 0.9)";
+          ctx.font = "700 36px Unbounded, sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText((s1.name || "K2").slice(0, 2).toUpperCase(), halfW + halfW / 2, H / 2 - 12);
+        }
+        this.drawNameTag(ctx, s1.name, halfW + 16, H - 48);
+
+        // Центральна лінія розподілу екрану навпіл
+        ctx.strokeStyle = "rgba(235, 178, 95, 0.7)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(halfW, 0);
+        ctx.lineTo(halfW, H);
+        ctx.stroke();
+
+        // Маленький індикатор кімнати вгорі
+        ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+        ctx.beginPath();
+        ctx.roundRect(halfW - 56, 12, 112, 26, 6);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.fillStyle = "rgba(235, 178, 95, 0.95)";
+        ctx.font = "600 12px 'JetBrains Mono', monospace";
         ctx.textAlign = "center";
-        ctx.fillText((s1.name || "K2").slice(0, 2).toUpperCase(), halfW + halfW / 2, H / 2 - 12);
+        ctx.textBaseline = "middle";
+        ctx.fillText("2 УЧАСНИКИ", halfW, 25);
       }
-      this.drawNameTag(ctx, s1.name, halfW + 16, H - 48);
-
-      // Центральна лінія розподілу екрану навпіл
-      ctx.strokeStyle = "rgba(235, 178, 95, 0.7)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(halfW, 0);
-      ctx.lineTo(halfW, H);
-      ctx.stroke();
-
-      // Маленький індикатор кімнати вгорі
-      ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-      ctx.beginPath();
-      ctx.roundRect(halfW - 56, 12, 112, 26, 6);
-      ctx.fill();
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.fillStyle = "rgba(235, 178, 95, 0.95)";
-      ctx.font = "600 12px 'JetBrains Mono', monospace";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("2 УЧАСНИКИ", halfW, 25);
     }
   }
 
