@@ -658,21 +658,6 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
               {camOn ? <IconCam className="w-4 h-4 sm:w-4.5 sm:h-4.5" /> : <IconCamOff className="w-4 h-4 sm:w-4.5 sm:h-4.5" />}
             </button>
             <button
-              className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[40px] sm:min-w-[40px] !p-2 ${
-                !localMedia?.hasCam || !camOn ? "opacity-40 cursor-not-allowed" : ""
-              } ${
-                localMedia?.facingMode === "environment"
-                  ? "!text-[var(--c-mint)] !border-[color-mix(in_srgb,var(--c-mint)_50%,transparent)] bg-[color-mix(in_srgb,var(--c-mint)_15%,transparent)]"
-                  : ""
-              }`}
-              onClick={handleSwitchCam}
-              disabled={!localMedia?.hasCam || !camOn || switchingCam}
-              title={`${t("video.switchCam")} (${localMedia?.facingMode === "environment" ? t("video.camBack") : t("video.camFront")})`}
-              aria-label={t("video.switchCam")}
-            >
-              <IconSwitchCamera className={`w-4 h-4 sm:w-4.5 sm:h-4.5 ${switchingCam ? "animate-spin" : ""}`} />
-            </button>
-            <button
               className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[40px] sm:min-w-[40px] !py-2 !px-2.5 sm:!px-3 ${
                 isFull
                   ? "!text-[var(--c-amber)] !border-[color-mix(in_srgb,var(--c-amber)_50%,transparent)] bg-[color-mix(in_srgb,var(--c-amber)_15%,transparent)]"

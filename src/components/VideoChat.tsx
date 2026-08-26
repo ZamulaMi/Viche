@@ -471,21 +471,6 @@ export default function VideoChat({
             {camOn ? <IconCam className="w-4 h-4 sm:w-5 sm:h-5" /> : <IconCamOff className="w-4 h-4 sm:w-5 sm:h-5" />}
           </button>
           <button
-            className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none ${
-              !localMedia?.hasCam || !camOn ? "opacity-40 cursor-not-allowed" : ""
-            } ${
-              localMedia?.facingMode === "environment"
-                ? "!text-[var(--c-mint)] !border-[color-mix(in_srgb,var(--c-mint)_50%,transparent)] bg-[color-mix(in_srgb,var(--c-mint)_15%,transparent)]"
-                : ""
-            }`}
-            onClick={handleSwitchCam}
-            disabled={!localMedia?.hasCam || !camOn || switchingCam}
-            title={`${t("video.switchCam")} (${localMedia?.facingMode === "environment" ? t("video.camBack") : t("video.camFront")})`}
-            aria-label={t("video.switchCam")}
-          >
-            <IconSwitchCamera className={`w-4 h-4 sm:w-5 sm:h-5 ${switchingCam ? "animate-spin" : ""}`} />
-          </button>
-          <button
             className="btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none relative"
             onClick={() => { setChatOpen((v) => !v); setUnread(0); }}
             title={t("chat.title")}
