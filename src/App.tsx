@@ -18,17 +18,19 @@ type Toast = { id: number; msg: string; kind: "ok" | "warn" };
 
 let tid = 0;
 
-function Ambient() {
+function Ambient({ paused }: { paused?: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
+    if (paused) return;
     const cv = ref.current;
     if (!cv) return;
     const ctx = cv.getContext("2d");
     if (!ctx) return;
     let raf = 0;
+    let last = 0;
     let w = 0;
     let h = 0;
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
     const resize = () => {
       w = cv.clientWidth;
       h = cv.clientHeight;
@@ -38,18 +40,24 @@ function Ambient() {
     };
     resize();
     window.addEventListener("resize", resize);
-    const dots = Array.from({ length: 44 }, () => ({
-      x: Math.random() * window.innerWidth,
-      y: Math.random() * window.innerHeight,
-      vx: (Math.random() - 0.5) * 0.24,
-      vy: (Math.random() - 0.5) * 0.24,
-      r: Math.random() * 1.7 + 0.6,
-      a: Math.random() * 0.4 + 0.12,
-      amber: Math.random() > 0.82,
+    const dots = Array.from({ length: 16 }, () => ({
+      x: Math.random() * (w || window.innerWidth),
+      y: Math.random() * (h || window.innerHeight),
+      vx: (Math.random() - 0.5) * 0.16,
+      vy: (Math.random() - 0.5) * 0.16,
+      r: Math.random() * 1.5 + 0.6,
+      a: Math.random() * 0.35 + 0.1,
+      amber: Math.random() > 0.8,
     }));
-    const draw = () => {
+    const draw = (ts: number) => {
+      if (document.hidden || paused) {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
       raf = requestAnimationFrame(draw);
-      if (document.hidden) return;
+      if (ts - last < 55) return; // Енергоощадні ~18 FPS для фонової анімації
+      last = ts;
+
       ctx.clearRect(0, 0, w, h);
       for (const d of dots) {
         d.x += d.vx;
@@ -69,7 +77,8 @@ function Ambient() {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", resize);
     };
-  }, []);
+  }, [paused]);
+  if (paused) return null;
   return <canvas ref={ref} className="fixed inset-0 w-full h-full pointer-events-none" aria-hidden />;
 }
 
@@ -160,7 +169,7 @@ function Shell() {
 
   return (
     <div className="min-h-screen relative">
-      <Ambient />
+      <Ambient paused={!!localMedia} />
       <div className="fixed inset-0 gridlines pointer-events-none" aria-hidden />
       <div className="fixed inset-0 noise pointer-events-none z-[60]" aria-hidden />
       <div className="fixed inset-0 vignette pointer-events-none" aria-hidden />

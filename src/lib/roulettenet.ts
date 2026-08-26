@@ -14,7 +14,7 @@
    ───────────────────────────────────────────────────────────── */
 import Peer from "peerjs";
 import type { DataConnection, MediaConnection } from "peerjs";
-import { attachNetRecovery, defaultPeerOptions, iceConfig, icePathInfo, restartIceOn } from "./net";
+import { attachNetRecovery, defaultPeerOptions, iceConfig, icePathInfo, optimizeSenderBitrate, restartIceOn } from "./net";
 import type { Gender, LangCode } from "./sim";
 
 export type RouletteFilters = {
@@ -717,6 +717,7 @@ export class RouletteNet {
     const pc = call.peerConnection;
     if (pc) {
       this.hooks.onIce?.("connecting");
+      optimizeSenderBitrate(pc);
 
       // Страховка через native ontrack
       pc.ontrack = (e) => {
@@ -734,6 +735,7 @@ export class RouletteNet {
           const st = pc.connectionState;
           if (st === "connected") {
             this.cancelRecovery();
+            optimizeSenderBitrate(pc);
             void icePathInfo(pc).then((tp) => this.hooks.onIce?.(tp));
           } else if (st === "failed") {
             this.triggerActiveCallRecovery();

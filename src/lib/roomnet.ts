@@ -12,7 +12,7 @@
    ───────────────────────────────────────────────────────────── */
 import Peer from "peerjs";
 import type { DataConnection, MediaConnection } from "peerjs";
-import { attachNetRecovery, defaultPeerOptions, iceConfig, icePathInfo, restartIceOn } from "./net";
+import { attachNetRecovery, defaultPeerOptions, iceConfig, icePathInfo, optimizeSenderBitrate, restartIceOn } from "./net";
 import { roomIdStr, type RoomId } from "./sim";
 
 export type Member = { id: string; name: string };
@@ -611,12 +611,14 @@ export class RoomNet {
     };
     const pc = call.peerConnection;
     if (pc) {
+      optimizeSenderBitrate(pc);
       try {
         pc.addEventListener("connectionstatechange", () => {
           if (this.calls.get(pid) !== call || this.disposed) return;
           const st = pc.connectionState;
           if (st === "connected") {
             clearWd();
+            optimizeSenderBitrate(pc);
             void icePathInfo(pc).then((tp) => {
               this.ice.set(pid, tp);
               this.emitIce();

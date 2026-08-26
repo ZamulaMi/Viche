@@ -29,11 +29,10 @@ export type CanvasCtl = {
 };
 
 /* Процедурний аватар: кільця, що обертаються + ініціали +
-   аудіо-хвиля. 15 FPS навмисно — медіа-енкодеру цього
-   достатньо, а CPU навантаження мінімальне.                   */
+   аудіо-хвиля. Енергоефективні 12 FPS і компактна сцена — мінімальне навантаження на процесор. */
 export function makeCanvasStream(label: string, hue: number): CanvasCtl {
-  const W = 640;
-  const H = 480; // 4:3 — базовий формат сцени Viche
+  const W = 480;
+  const H = 360; // 4:3 — компактний енергоефективний формат сцени Viche
   const canvas = document.createElement("canvas");
   canvas.width = W;
   canvas.height = H;
@@ -53,61 +52,56 @@ export function makeCanvasStream(label: string, hue: number): CanvasCtl {
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
     const cx = W / 2;
-    const cy = H / 2 - 14;
+    const cy = H / 2 - 10;
     // орбітальні кільця
     for (let i = 0; i < 3; i++) {
-      const r = 96 + i * 30;
+      const r = 72 + i * 22;
       const a0 = t * (0.25 + i * 0.14) * (i % 2 ? -1 : 1) + seed;
       ctx.beginPath();
       ctx.arc(cx, cy, r, a0, a0 + Math.PI * (1.1 - i * 0.22));
       ctx.strokeStyle = `hsla(${hue} 70% 62% / ${0.5 - i * 0.13})`;
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 1.8;
       ctx.stroke();
     }
     // медальйон з ініціалами
-    const rg = ctx.createRadialGradient(cx, cy, 8, cx, cy, 88);
+    const rg = ctx.createRadialGradient(cx, cy, 6, cx, cy, 66);
     rg.addColorStop(0, `hsl(${hue} 45% 26%)`);
     rg.addColorStop(1, `hsl(${hue} 45% 15%)`);
     ctx.fillStyle = rg;
     ctx.beginPath();
-    ctx.arc(cx, cy, 84, 0, Math.PI * 2);
+    ctx.arc(cx, cy, 64, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = `hsla(${hue} 80% 70% / 0.75)`;
-    ctx.lineWidth = 2.5;
+    ctx.lineWidth = 2;
     ctx.stroke();
     ctx.fillStyle = `hsl(${hue} 85% 78%)`;
-    ctx.font = "700 58px Unbounded, Manrope, sans-serif";
+    ctx.font = "700 44px Unbounded, Manrope, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(label.slice(0, 2).toUpperCase(), cx, cy + 4);
+    ctx.fillText(label.slice(0, 2).toUpperCase(), cx, cy + 3);
     // аудіо-хвиля
-    const bars = 30;
+    const bars = 24;
     const bw = W / bars;
     for (let i = 0; i < bars; i++) {
       const amp = speaking
-        ? 14 + Math.abs(Math.sin(t * 5.2 + i * 0.9 + seed)) * 30
-        : 5 + Math.abs(Math.sin(t * 1.4 + i * 0.7 + seed)) * 9;
+        ? 10 + Math.abs(Math.sin(t * 5.2 + i * 0.9 + seed)) * 22
+        : 4 + Math.abs(Math.sin(t * 1.4 + i * 0.7 + seed)) * 6;
       const x = i * bw;
       ctx.fillStyle = `hsla(${hue} 75% 65% / ${speaking ? 0.85 : 0.4})`;
-      ctx.fillRect(x + bw * 0.24, H - 26 - amp, bw * 0.5, amp);
+      ctx.fillRect(x + bw * 0.24, H - 20 - amp, bw * 0.5, amp);
     }
     // позначка LIVE
-    ctx.font = "500 13px 'JetBrains Mono', monospace";
+    ctx.font = "500 11px 'JetBrains Mono', monospace";
     ctx.textAlign = "left";
     ctx.fillStyle = speaking ? "hsla(152 70% 62% / 0.95)" : "hsla(0 0% 100% / 0.4)";
-    ctx.fillText(speaking ? "● VOICE" : "○ IDLE", 16, 24);
-    // віньєтка
-    const v = ctx.createRadialGradient(cx, H / 2, H * 0.35, cx, H / 2, H * 0.95);
-    v.addColorStop(0, "rgba(0,0,0,0)");
-    v.addColorStop(1, "rgba(0,0,0,0.42)");
-    ctx.fillStyle = v;
-    ctx.fillRect(0, 0, W, H);
+    ctx.fillText(speaking ? "● VOICE" : "○ IDLE", 12, 18);
   };
 
   const loop = (ts: number) => {
     if (!alive) return;
     raf = requestAnimationFrame(loop);
-    if (ts - last < 66) return; // ~15 FPS
+    if (document.hidden) return; // пропуск рендерингу у фоні
+    if (ts - last < 80) return; // ~12 FPS
     last = ts;
     draw(ts / 1000);
   };
@@ -118,7 +112,7 @@ export function makeCanvasStream(label: string, hue: number): CanvasCtl {
     raf = requestAnimationFrame(loop);
   }
 
-  const stream = canvas.captureStream(15);
+  const stream = canvas.captureStream(12);
   return {
     stream,
     isReal: false,
@@ -171,6 +165,20 @@ async function getCameraDevices(): Promise<{
   }
 }
 
+const THERMAL_SAFE_VIDEO = (mode?: FacingMode, deviceId?: string) => ({
+  ...(deviceId ? { deviceId: { exact: deviceId } } : mode ? { facingMode: { ideal: mode } } : {}),
+  width: { ideal: 640, max: 960 },
+  height: { ideal: 480, max: 720 },
+  frameRate: { ideal: 24, max: 30 },
+  aspectRatio: { ideal: 4 / 3 },
+});
+
+const THERMAL_SAFE_AUDIO = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+};
+
 async function acquireCameraTrack(
   targetMode: FacingMode,
   previousTrackId?: string,
@@ -182,8 +190,9 @@ async function acquireCameraTrack(
     const stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: { exact: targetMode },
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
+        width: { ideal: 640, max: 960 },
+        height: { ideal: 480, max: 720 },
+        frameRate: { ideal: 24, max: 30 },
       },
     });
     const tr = stream.getVideoTracks()[0];
@@ -200,11 +209,7 @@ async function acquireCameraTrack(
     if (dev.deviceId) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            deviceId: { exact: dev.deviceId },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
+          video: THERMAL_SAFE_VIDEO(undefined, dev.deviceId),
         });
         const tr = stream.getVideoTracks()[0];
         if (tr) {
@@ -222,11 +227,7 @@ async function acquireCameraTrack(
     if (otherDev?.deviceId) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            deviceId: { exact: otherDev.deviceId },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
+          video: THERMAL_SAFE_VIDEO(undefined, otherDev.deviceId),
         });
         const tr = stream.getVideoTracks()[0];
         if (tr) {
@@ -245,11 +246,7 @@ async function acquireCameraTrack(
   // 4. Спроба з ideal facingMode
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: targetMode },
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-      },
+      video: THERMAL_SAFE_VIDEO(targetMode),
     });
     const tr = stream.getVideoTracks()[0];
     if (tr) {
@@ -264,7 +261,7 @@ async function acquireCameraTrack(
   // 5. Загальна спроба з простим facingMode
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: targetMode },
+      video: { facingMode: targetMode, frameRate: { ideal: 24, max: 30 } },
     });
     const tr = stream.getVideoTracks()[0];
     if (tr) {
@@ -285,19 +282,21 @@ export async function getLocalStream(initialFacing: FacingMode = "user"): Promis
     let s: MediaStream;
     try {
       s = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: currentFacing },
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          aspectRatio: { ideal: 4 / 3 },
-        },
-        audio: true,
+        video: THERMAL_SAFE_VIDEO(currentFacing),
+        audio: THERMAL_SAFE_AUDIO,
       });
     } catch {
-      s = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
-      });
+      try {
+        s = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: currentFacing } },
+          audio: true,
+        });
+      } catch {
+        s = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: true,
+        });
+      }
     }
 
     const localObj: LocalMedia = {

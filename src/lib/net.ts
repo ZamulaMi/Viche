@@ -113,6 +113,33 @@ export function restartIceOn(call: MediaConnection | null | undefined): boolean 
   return false;
 }
 
+/* Оптимізація бітрейту та параметрів енкодера (запобігає нагріванню процесора/GPU та економить заряд батареї) */
+export function optimizeSenderBitrate(pc: RTCPeerConnection | null | undefined) {
+  if (!pc) return;
+  try {
+    const senders = pc.getSenders();
+    senders.forEach((sender) => {
+      if (sender.track?.kind === "video") {
+        try {
+          const params = sender.getParameters();
+          if (!params.encodings || params.encodings.length === 0) {
+            params.encodings = [{}];
+          }
+          // 850 kbps і 30 fps достатньо для чіткого відео 480p/720p без перевантаження термопакета пристрою
+          params.encodings[0].maxBitrate = 850_000;
+          params.encodings[0].maxFramerate = 30;
+          params.degradationPreference = "maintain-framerate";
+          sender.setParameters(params).catch(() => {});
+        } catch {
+          /* noop */
+        }
+      }
+    });
+  } catch {
+    /* noop */
+  }
+}
+
 export function attachNetRecovery(
   getCalls: () => Array<MediaConnection | null | undefined>,
   onNetworkChange?: () => void

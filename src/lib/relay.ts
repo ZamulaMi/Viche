@@ -29,13 +29,18 @@ export class StreamRelay {
     this.canvas.height = 480;
     this.ctx = this.canvas.getContext("2d");
 
-    // 1. Створюємо стабільний локальний відеотрек через canvas.captureStream
-    const canvasStream = this.canvas.captureStream(30);
+    // 1. Створюємо стабільний локальний відеотрек через canvas.captureStream (24 FPS для збереження заряду та процесора)
+    const canvasStream = this.canvas.captureStream(24);
     const videoTrack = canvasStream.getVideoTracks()[0];
 
-    // 2. Цикл відтворення кадрів з вхідного відео у canvas
-    const render = () => {
+    // 2. Цикл відтворення кадрів з вхідного відео у canvas (енергоефективний троттлінг ~24 FPS)
+    let lastRenderTime = 0;
+    const render = (ts: number) => {
       if (this.disposed) return;
+      this.animId = requestAnimationFrame(render);
+      if (ts - lastRenderTime < 41) return; // ~24 FPS замість 60 FPS
+      lastRenderTime = ts;
+
       if (this.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && this.ctx) {
         const vw = this.video.videoWidth;
         const vh = this.video.videoHeight;
@@ -47,7 +52,6 @@ export class StreamRelay {
         }
         this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
       }
-      this.animId = requestAnimationFrame(render);
     };
     this.animId = requestAnimationFrame(render);
 

@@ -132,43 +132,53 @@ export default function VideoChat({
     };
   }, [isFull]);
 
-  /* індикатор мовлення: реальний VAD за аудіо-треком, для демо — симуляція */
+  /* індикатор мовлення: легкий VAD за аудіо-треком (інтервальний аналіз без навантаження на CPU) */
   useEffect(() => {
     let stopFn: (() => void) | null = null;
     const hasAudio = !!remoteStream && remoteStream.getAudioTracks().length > 0;
     if (hasAudio && remoteStream) {
       let ctx: AudioContext | null = null;
-      let raf = 0;
-      let dead = false;
+      let timer = 0;
+      let prevSpeaking = false;
       try {
-        ctx = new AudioContext();
-        const src = ctx.createMediaStreamSource(remoteStream);
-        const an = ctx.createAnalyser();
-        an.fftSize = 512;
-        src.connect(an);
-        const buf = new Uint8Array(an.fftSize);
-        let last = 0;
-        const tick = (ts: number) => {
-          if (dead) return;
-          raf = requestAnimationFrame(tick);
-          if (ts - last < 140) return;
-          last = ts;
-          an.getByteTimeDomainData(buf);
-          let sum = 0;
-          for (let i = 0; i < buf.length; i++) {
-            const d = (buf[i] - 128) / 128;
-            sum += d * d;
-          }
-          const s = Math.sqrt(sum / buf.length) > 0.04;
-          setSpeaking(s);
-          setRemoteSpeaking(s);
-        };
-        raf = requestAnimationFrame(tick);
-        stopFn = () => {
-          dead = true;
-          cancelAnimationFrame(raf);
-          ctx?.close().catch(() => {});
-        };
+        const AudioCtxClass =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        if (AudioCtxClass) {
+          ctx = new AudioCtxClass();
+          const src = ctx.createMediaStreamSource(remoteStream);
+          const an = ctx.createAnalyser();
+          an.fftSize = 128;
+          src.connect(an);
+          const buf = new Uint8Array(an.fftSize);
+
+          timer = window.setInterval(() => {
+            if (!ctx || ctx.state === "closed") return;
+            an.getByteTimeDomainData(buf);
+            let sum = 0;
+            for (let i = 0; i < buf.length; i += 2) {
+              const d = (buf[i] - 128) / 128;
+              sum += d * d;
+            }
+            const s = Math.sqrt(sum / (buf.length / 2)) > 0.045;
+            if (s !== prevSpeaking) {
+              prevSpeaking = s;
+              setSpeaking(s);
+              setRemoteSpeaking(s);
+            }
+          }, 180);
+
+          stopFn = () => {
+            window.clearInterval(timer);
+            try {
+              src.disconnect();
+              an.disconnect();
+              ctx?.close().catch(() => {});
+            } catch {
+              /* noop */
+            }
+          };
+        }
       } catch {
         stopFn = null;
       }
@@ -179,7 +189,7 @@ export default function VideoChat({
         const s = Math.random() > 0.42;
         setSpeaking(s);
         setRemoteSpeaking(s);
-      }, 2400);
+      }, 2600);
       stopFn = () => window.clearInterval(iv);
     }
     return () => {
