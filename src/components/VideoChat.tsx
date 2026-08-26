@@ -379,8 +379,8 @@ export default function VideoChat({
             autoPlay
             playsInline
             muted
-            className={`w-full h-full object-contain bg-[var(--c-bg2)] transition-transform duration-300 ${
-              facingMode === "environment" ? "scale-x-1" : "-scale-x-100"
+            className={`w-full h-full object-cover bg-[var(--c-bg2)] transition-transform duration-300 ${
+              facingMode === "environment" ? "scale-x-100" : "-scale-x-100"
             }`}
           />
         ) : (

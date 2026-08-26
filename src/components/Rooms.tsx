@@ -136,7 +136,7 @@ function Tile({
         playsInline
         muted={muted}
         className={`absolute inset-0 w-full h-full object-contain transition-transform duration-300 ${
-          isSelf && facingMode !== "environment" ? "-scale-x-100" : "scale-x-1"
+          isSelf && facingMode !== "environment" ? "-scale-x-100" : "scale-x-100"
         }`}
       />
       <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 px-3 py-2 bg-gradient-to-t from-black/75 to-transparent z-10">
