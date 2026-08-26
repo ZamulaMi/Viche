@@ -216,18 +216,21 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
   const [facingMode, setFacingMode] = useState<FacingMode>(localMedia?.facingMode ?? "user");
+  const [selfStream, setSelfStream] = useState<MediaStream | null>(localMedia?.stream ?? null);
   const [switchingCam, setSwitchingCam] = useState(false);
   const roomBoxRef = useRef<HTMLDivElement>(null);
 
   const toggleMic = () => {
     setMicOn((v) => {
-      localMedia?.stream.getAudioTracks().forEach((tr) => (tr.enabled = v ? false : true));
+      const s = selfStream || localMedia?.stream;
+      s?.getAudioTracks().forEach((tr) => (tr.enabled = v ? false : true));
       return !v;
     });
   };
   const toggleCam = () => {
     setCamOn((v) => {
-      localMedia?.stream.getVideoTracks().forEach((tr) => (tr.enabled = v ? false : true));
+      const s = selfStream || localMedia?.stream;
+      s?.getVideoTracks().forEach((tr) => (tr.enabled = v ? false : true));
       return !v;
     });
   };
@@ -238,6 +241,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
     try {
       const res = await localMedia.switchCamera();
       setFacingMode(res.facingMode);
+      setSelfStream(res.stream);
       onToast(res.facingMode === "environment" ? t("video.camBack") : t("video.camFront"), "ok");
       if (netRef.current) {
         netRef.current.updateStream(res.stream, res.videoTrack);
@@ -685,7 +689,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
               {/* реальні учасники (mesh P2P) */}
               {roster.map((m) => {
                 const self = netRef.current?.myId === m.id;
-                const st = self ? localMedia?.stream : streams[m.id];
+                const st = self ? (selfStream || localMedia?.stream) : streams[m.id];
                 return st ? (
                   <Tile
                     key={m.id}

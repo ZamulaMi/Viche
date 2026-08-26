@@ -277,6 +277,11 @@ export default function VideoChat({
       if (localRef.current) {
         localRef.current.srcObject = null;
         localRef.current.srcObject = res.stream;
+        try {
+          localRef.current.load();
+        } catch {
+          /* noop */
+        }
         localRef.current.play().catch(() => {});
       }
     } catch {
