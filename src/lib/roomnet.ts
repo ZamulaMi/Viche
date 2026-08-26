@@ -12,7 +12,7 @@
    ───────────────────────────────────────────────────────────── */
 import Peer from "peerjs";
 import type { DataConnection, MediaConnection } from "peerjs";
-import { attachNetRecovery, iceConfig, icePathInfo, restartIceOn } from "./net";
+import { attachNetRecovery, defaultPeerOptions, iceConfig, icePathInfo, restartIceOn } from "./net";
 import { roomIdStr, type RoomId } from "./sim";
 
 export type Member = { id: string; name: string };
@@ -94,7 +94,7 @@ export class RoomNet {
 
   /* ── спроба стати хостом; якщо ID зайнятий — приєднуємось гостем ── */
   private tryHost() {
-    const p = new Peer(this.hostId, { debug: 0, config: iceConfig });
+    const p = new Peer(this.hostId, { ...defaultPeerOptions });
     p.on("open", () => {
       if (this.disposed) return p.destroy();
       this.peer = p;
@@ -175,7 +175,7 @@ export class RoomNet {
   /* ── гість: підключення до хоста ── */
   private joinAsGuest() {
     if (this.disposed) return;
-    const p = new Peer({ debug: 0, config: iceConfig });
+    const p = new Peer({ ...defaultPeerOptions });
     p.on("open", () => {
       if (this.disposed) return p.destroy();
       this.peer = p;

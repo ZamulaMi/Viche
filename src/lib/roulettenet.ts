@@ -14,7 +14,7 @@
    ───────────────────────────────────────────────────────────── */
 import Peer from "peerjs";
 import type { DataConnection, MediaConnection } from "peerjs";
-import { attachNetRecovery, iceConfig, icePathInfo, restartIceOn } from "./net";
+import { attachNetRecovery, defaultPeerOptions, iceConfig, icePathInfo, restartIceOn } from "./net";
 import type { Gender, LangCode } from "./sim";
 
 export type RouletteFilters = {
@@ -196,7 +196,7 @@ export class RouletteNet {
 
     const newId = `viche-v3-u-${this.uid.slice(0, 6)}-${randHex(6)}`;
     this.myPeerId = newId;
-    const p = new Peer(newId, { debug: 0, config: iceConfig });
+    const p = new Peer(newId, { ...defaultPeerOptions });
     this.myPeer = p;
 
     p.on("open", (id) => {
@@ -286,7 +286,7 @@ export class RouletteNet {
       current++;
       const slotId = this.slotId(slotNum);
 
-      const bp = new Peer(slotId, { debug: 0, config: iceConfig });
+      const bp = new Peer(slotId, { ...defaultPeerOptions });
       let settled = false;
 
       const timeoutId = window.setTimeout(() => {

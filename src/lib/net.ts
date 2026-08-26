@@ -4,17 +4,36 @@
    Використовуються і рулеткою (roulettenet.ts), і кімнатами (roomnet.ts).
    Сигналінг — публічний PeerJS-брокер; медіа — P2P WebRTC (DTLS/SRTP).
    ───────────────────────────────────────────────────────────── */
-import type { MediaConnection } from "peerjs";
+import type { MediaConnection, PeerOptions } from "peerjs";
 
-/* NAT traversal + глобальні з'єднання.
+/* NAT traversal + глобальні з'єднання (мобільний інтернет 4G/5G, CGNAT, Wi-Fi).
    За замовчуванням — повний ICE-каскад (host → srflx/STUN → relay/TURN):
    браузер сам обирає найкращий робочий шлях, тому з'єднання встановлюється
-   і локально, і глобально. Google STUN покриває більшість домашніх мереж
-   (cone-NAT) без TURN; публічні TURN — резерв для симетричних NAT.
-   VITE_RELAY_ONLY=true + VITE_TURN_URL — примусово ТІЛЬКИ relay через ваш
-   coturn (приватність + гарантований глобальний трафік). Реквізити свого
-   TURN: VITE_TURN_URL / VITE_TURN_USERNAME / VITE_TURN_CREDENTIAL. */
+   і локально, і глобально між будь-якими операторами зв'язку.
+   
+   Google STUN, Cloudflare STUN, Twilio STUN та надійні TURN-реле (у тому числі
+   через TCP/TLS порт 443) забезпечують пробиття мобільних симетричних NAT (CGNAT). */
 const env = import.meta.env;
+
+// Читання користувацького TURN з localStorage (якщо налаштовано) або з .env
+let savedTurnConfig: RTCIceServer[] = [];
+try {
+  const localTurnUrl = localStorage.getItem("viche_custom_turn_url");
+  const localTurnUser = localStorage.getItem("viche_custom_turn_user");
+  const localTurnPass = localStorage.getItem("viche_custom_turn_pass");
+  if (localTurnUrl) {
+    savedTurnConfig = [
+      {
+        urls: localTurnUrl.split(",").map((s) => s.trim()),
+        username: localTurnUser || undefined,
+        credential: localTurnPass || undefined,
+      },
+    ];
+  }
+} catch {
+  /* noop */
+}
+
 const customTurn: RTCIceServer[] = env.VITE_TURN_URL
   ? [
       {
@@ -23,51 +42,77 @@ const customTurn: RTCIceServer[] = env.VITE_TURN_URL
         credential: env.VITE_TURN_CREDENTIAL ? String(env.VITE_TURN_CREDENTIAL) : undefined,
       },
     ]
-  : [];
+  : savedTurnConfig;
 
 const relayOnly = env.VITE_RELAY_ONLY === "true" || env.VITE_RELAY_ONLY === "1";
 
 export const iceConfig: RTCConfiguration = {
   iceServers: [
     ...customTurn,
-    // STUN — визначає публічні адреси (srflx-кандидати). Більшість
-    // глобальних з'єднань між домашніми мережами (cone-NAT) проходять
-    // саме через STUN — без жодного TURN. Google STUN — найнадійніший.
+    // 1. Провідні глобальні STUN-сервери (визначення публічної IP:порт)
     {
       urls: [
         "stun:stun.l.google.com:19302",
         "stun:stun1.l.google.com:19302",
         "stun:stun2.l.google.com:19302",
+        "stun:stun3.l.google.com:19302",
+        "stun:stun4.l.google.com:19302",
+        "stun:stun.cloudflare.com:3478",
+        "stun:global.stun.twilio.com:3478",
+        "stun:stun.services.mozilla.com:3478",
+        "stun:stun.sipgate.net:3478",
+        "stun:stun.syncthing.net:3478",
       ],
     },
-    // Публічні TURN — best-effort для симетричних NAT (мобільні
-    // оператори, подвійний NAT). Реквізити часто ротуються, тому це
-    // резерв, а не основа. Власний coturn (compose) — VITE_TURN_URL.
+    // 2. Безкоштовні глобальні TURN-сервери (OpenRelay / Metered)
+    // Працюють через порти 80, 443 (HTTPS), 5349 (TLS), TCP і UDP.
+    // Проходять крізь мобільні мережі (Kyivstar, Vodafone, Lifecell тощо) та CGNAT.
     {
       urls: [
         "turn:openrelay.metered.ca:80",
         "turn:openrelay.metered.ca:80?transport=tcp",
         "turn:openrelay.metered.ca:443",
+        "turn:openrelay.metered.ca:443?transport=tcp",
         "turns:openrelay.metered.ca:443?transport=tcp",
+        "turns:openrelay.metered.ca:5349?transport=tcp",
       ],
       username: "openrelayproject",
       credential: "openrelayproject",
     },
     {
-      urls: "turn:demo.nextcloud.com:443?transport=tcp",
-      username: "nextcloud",
-      credential: "nextcloud",
+      urls: [
+        "turn:standard.relay.metered.ca:80",
+        "turn:standard.relay.metered.ca:80?transport=tcp",
+        "turn:standard.relay.metered.ca:443",
+        "turn:standard.relay.metered.ca:443?transport=tcp",
+        "turns:standard.relay.metered.ca:443?transport=tcp",
+      ],
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls: [
+        "turn:relay.metered.ca:80",
+        "turn:relay.metered.ca:80?transport=tcp",
+        "turn:relay.metered.ca:443",
+        "turn:relay.metered.ca:443?transport=tcp",
+        "turns:relay.metered.ca:443?transport=tcp",
+      ],
+      username: "openrelayproject",
+      credential: "openrelayproject",
     },
   ],
-  // Повний ICE-каскад: host → srflx (STUN) → relay (TURN). Браузер
-  // пробує всі шляхи і обирає найкращий робочий — з'єднання встановлюється
-  // і в локальній, і в глобальній мережі, незалежно від типу NAT.
-  //
-  // VITE_RELAY_ONLY=true — примусово ТІЛЬКИ relay (усі медіа через ваш
-  // coturn): максимальна приватність + гарантований глобальний трафік,
-  // але потрібен робочий TURN (VITE_TURN_URL), інакше з'єднань не буде.
+  // Повний ICE-каскад (host → srflx → relay)
   ...(relayOnly ? { iceTransportPolicy: "relay" as RTCIceTransportPolicy } : {}),
-  iceCandidatePoolSize: 2,
+  // Попередній збір кандидатів: прискорює встановлення з'єднання на мобільному інтернеті
+  iceCandidatePoolSize: 6,
+};
+
+/* Спільні налаштування PeerJS з heartbeat для мобільних мереж */
+export const defaultPeerOptions: PeerOptions = {
+  debug: 0,
+  config: iceConfig,
+  pingInterval: 5000, // регулярний пінг запобігає закриттю NAT-таблиць у мобільних операторів
 };
 
 /* Яким шляхом з'єдналась пара: relay (TURN) / stun / lan (direct) */
