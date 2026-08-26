@@ -101,12 +101,11 @@ export class RoomNet {
       }
     }
     if (this.isHost) {
+      this.broadcastRoster();
       this.meshSync();
     } else {
-      const hostConn = this.conns.get(this.hostId);
-      if (!hostConn || !hostConn.open) {
-        this.attemptGuestReconnect();
-      }
+      this.attemptGuestReconnect();
+      this.meshSync();
     }
   }
 
@@ -587,7 +586,15 @@ export class RoomNet {
         this.calls.delete(pid);
         this.ice.delete(pid);
         this.emitIce();
-        if (!this.disposed) this.hooks.onPeerGone(pid);
+        if (!this.disposed && !this.roster.some((m) => m.id === pid)) {
+          this.hooks.onPeerGone(pid);
+        } else if (!this.disposed) {
+          window.setTimeout(() => {
+            if (!this.disposed && this.roster.some((m) => m.id === pid)) {
+              this.meshSync();
+            }
+          }, 600);
+        }
       }
     });
     call.on("error", () => {

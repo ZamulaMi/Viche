@@ -98,6 +98,8 @@ export class RouletteNet {
   private connectWatchdog = 0;
   private fallbackInitiatorTimer = 0;
   private recoveryTimer = 0;
+  private recoveryInterval = 0;
+  private recoveryAttempts = 0;
   private recovering = false;
   private explicitBye = false;
   private detachNet: (() => void) | null = null;
@@ -629,6 +631,13 @@ export class RouletteNet {
     if (!this.paired || conn.peer !== this.partnerId) {
       return;
     }
+    if (this.chatConn && this.chatConn !== conn) {
+      try {
+        this.chatConn.close();
+      } catch {
+        /* noop */
+      }
+    }
     this.chatConn = conn;
     this.wireChat(conn);
   }
@@ -644,6 +653,13 @@ export class RouletteNet {
     }
     window.clearTimeout(this.fallbackInitiatorTimer);
     try {
+      if (this.call && this.call !== call) {
+        try {
+          this.call.close();
+        } catch {
+          /* noop */
+        }
+      }
       call.answer(this.stream);
       this.wireCall(call);
     } catch {
@@ -668,7 +684,7 @@ export class RouletteNet {
         if (this.explicitBye) {
           this.partnerLeft();
         } else {
-          // Можливий розрив TCP при зміні мережі (Wi-Fi ↔ LTE) — спробуємо відновити
+          // Можливий розрив TCP при зміні мережі (Wi-Fi ↔ LTE) — запускаємо відновлення
           this.triggerActiveCallRecovery();
         }
       }
@@ -721,6 +737,13 @@ export class RouletteNet {
             void icePathInfo(pc).then((tp) => this.hooks.onIce?.(tp));
           } else if (st === "failed") {
             this.triggerActiveCallRecovery();
+          } else if (st === "disconnected") {
+            // Короткочасна затримка перед реконектом при переході на новий інтерфейс
+            window.setTimeout(() => {
+              if (this.paired && !this.disposed && (pc.connectionState === "disconnected" || pc.connectionState === "failed")) {
+                this.triggerActiveCallRecovery();
+              }
+            }, 1200);
           } else {
             this.hooks.onIce?.(st);
           }
@@ -756,39 +779,114 @@ export class RouletteNet {
     });
   }
 
-  /* ── Автоматичне відновлення зв'язку при перемиканні мережі або збої ICE ── */
+  /* ── Автоматичне відновлення зв'язку при перемиканні мережі (Wi-Fi ↔ 4G/5G) ── */
   private triggerActiveCallRecovery() {
     if (!this.paired || this.disposed || this.explicitBye || this.recovering) return;
 
     this.recovering = true;
     this.hooks.onIce?.("reconnecting");
+    this.recoveryAttempts = 0;
 
-    // 1. Якщо локальний Peer втратив WS-з'єднання з сигналінгом, підключаємо знову
-    if (this.myPeer && this.myPeer.disconnected && !this.myPeer.destroyed) {
+    const ensureSignaling = () => {
+      if (this.disposed || !this.paired) return;
+      if (!this.myPeer || this.myPeer.destroyed) {
+        if (this.myPeerId) {
+          const p = new Peer(this.myPeerId, { ...defaultPeerOptions });
+          this.myPeer = p;
+          p.on("connection", (conn) => this.onIncomingPeerConnection(conn));
+          p.on("call", (c) => this.onIncomingPeerCall(c));
+          p.on("error", () => {
+            /* noop */
+          });
+        }
+      } else if (this.myPeer.disconnected) {
+        try {
+          this.myPeer.reconnect();
+        } catch {
+          /* noop */
+        }
+      }
+    };
+
+    ensureSignaling();
+
+    // Закриваємо старі завислі канали на застарілій IP-адресі
+    if (this.call) {
       try {
-        this.myPeer.reconnect();
+        this.call.close();
       } catch {
         /* noop */
       }
+      this.call = null;
+    }
+    if (this.chatConn) {
+      try {
+        this.chatConn.close();
+      } catch {
+        /* noop */
+      }
+      this.chatConn = null;
     }
 
-    // 2. Викликаємо ICE restart на поточному RTCPeerConnection
-    if (this.call) {
-      restartIceOn(this.call);
-    }
+    const partner = this.partnerId;
+    if (!partner) return;
 
-    // 3. Якщо протягом 7.5 секунд зв'язок не відновився — завершуємо пару
+    const isInitiator = this.cmp(this.myPeerId, partner) < 0;
+
+    const attemptReconnect = () => {
+      if (this.disposed || !this.paired || !this.recovering || !this.partnerId) return;
+      ensureSignaling();
+      this.recoveryAttempts++;
+
+      if (isInitiator || this.recoveryAttempts >= 2) {
+        try {
+          if (this.myPeer && !this.myPeer.destroyed && (!this.chatConn || !this.chatConn.open)) {
+            const c = this.myPeer.connect(this.partnerId, { reliable: true });
+            if (c) {
+              this.chatConn = c;
+              this.wireChat(c);
+            }
+          }
+          if (this.myPeer && !this.myPeer.destroyed && !this.call) {
+            const call = this.myPeer.call(this.partnerId, this.stream);
+            if (call) {
+              this.wireCall(call);
+            }
+          }
+        } catch {
+          /* noop */
+        }
+      }
+    };
+
+    // Перша спроба через 350мс після підключення сокету
+    window.setTimeout(attemptReconnect, 350);
+
+    // Періодичні спроби відновлення кожні 1.6 с
+    window.clearInterval(this.recoveryInterval);
+    this.recoveryInterval = window.setInterval(() => {
+      if (!this.recovering || !this.paired || this.disposed) {
+        window.clearInterval(this.recoveryInterval);
+        return;
+      }
+      attemptReconnect();
+    }, 1600);
+
+    // Загальний таймер відновлення зв'язку (12 с)
     window.clearTimeout(this.recoveryTimer);
     this.recoveryTimer = window.setTimeout(() => {
+      window.clearInterval(this.recoveryInterval);
       if (this.paired && this.recovering && !this.disposed) {
         this.partnerLeft();
       }
-    }, 7500);
+    }, 12000);
   }
 
   private cancelRecovery() {
     this.recovering = false;
+    this.recoveryAttempts = 0;
     window.clearTimeout(this.recoveryTimer);
+    window.clearInterval(this.recoveryInterval);
   }
 
   private partnerLeft() {
@@ -808,11 +906,13 @@ export class RouletteNet {
     this.paired = false;
     this.connected = false;
     this.recovering = false;
+    this.recoveryAttempts = 0;
     this.explicitBye = false;
     this.partnerId = null;
     window.clearTimeout(this.connectWatchdog);
     window.clearTimeout(this.fallbackInitiatorTimer);
     window.clearTimeout(this.recoveryTimer);
+    window.clearInterval(this.recoveryInterval);
 
     if (this.chatConn) {
       try {
