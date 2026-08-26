@@ -1,16 +1,16 @@
 /* ─────────────────────────────────────────────────────────────
    Viche · децентралізований глобальний пошук (рулетка)
 
-   Чому це надійно (на відміну від старого «лобі-тримача»):
-   • Кожен шукач ОТРИМУЄ слот-«домівку» (PeerJS-ID viche-v2-q-XXX) —
-     його можуть знайти інші.
-   • Одночасно кожен шукач НЕПЕРЕРВНО стукає до інших слотів.
-     Тобто всі — і «домівки», і «мандрівники» водночас: жодної
-     єдиної точки відмови, жодних черг, жодних ботів.
-   • З'єднання = звичайний PeerJS-виклик (той самий транспорт, що
-     працює в кімнатах) + окремий DataChannel для чату.
-   • Детерміноване обрання ініціатора: парує той, чий ID менший —
-     неможливо створити два паралельні дзвінки.
+   Архітектура швидкого надійного глобального пошуку:
+   • Кожен користувач миттєво отримує персональний ID на сигнальному
+     сервері (viche-v3-u-XXX), готовий приймати виклики без черги.
+   • Шукачі автоматично оголошують себе в спільні слоти-маяки (beacons)
+     та паралельно опитують інші маяки рою.
+   • Як тільки 2 шукачі знаходять один одного — обмінюються рукостисканням
+     knock/accept, звільняють маяки та встановлюють пряме DTLS/SRTP
+     WebRTC-з'єднання і канал зв'язку.
+   • Детермінований ініціатор (за лексикографічним порівнянням ID)
+     із таймером взаємної страховки виключає стан гонитви чи зависання.
    ───────────────────────────────────────────────────────────── */
 import Peer from "peerjs";
 import type { DataConnection, MediaConnection } from "peerjs";
@@ -27,7 +27,7 @@ export type RState = "idle" | "searching" | "connecting" | "paired";
 
 export type RouletteHooks = {
   onState: (s: RState) => void;
-  /** який слот ми зараз тримаємо (для прозорості) */
+  /** номер активного слота/маяка */
   onSlot: (slot: number) => void;
   onPair: (stream: MediaStream, peerId: string) => void;
   onPeerLeft: () => void;
@@ -35,20 +35,18 @@ export type RouletteHooks = {
 };
 
 type Wire =
-  | { t: "knock"; f: RouletteFilters; u: string }
-  | { t: "accept"; u: string }
+  | { t: "knock"; from: string; f: RouletteFilters; u: string }
+  | { t: "accept"; from: string; u: string }
   | { t: "busy" }
-  | { t: "chello" }
+  | { t: "chello"; from: string }
   | { t: "chat"; text: string }
   | { t: "bye" };
 
-const PREFIX = "viche-v2-q-";
-const N_SLOTS = 24;
-const PROBE_EVERY = 1200; // як часто стукаємо до нового слоту
-const KNOCK_TIMEOUT = 3200; // скільки чекаємо на accept
+const BEACON_PREFIX = "viche-v3-s-";
+const N_SLOTS = 32;
+const PROBE_INTERVAL = 600; // швидке паралельне зондування маяків
+const KNOCK_TIMEOUT = 1800; // швидкий таймаут опитування
 
-/* Стабільний відбиток браузера: захищає від самоз'єднання, коли
-   відкрито дві вкладки або сторінку перезавантажено під час пошуку. */
 function browserUid(): string {
   try {
     let id = localStorage.getItem("viche:uid");
@@ -62,8 +60,15 @@ function browserUid(): string {
   }
 }
 
-/* Симетрична перевірка сумісності фільтрів:
-   достатньо однієї сторони, бо функція симетрична. */
+function randHex(n = 6): string {
+  const chars = "0123456789abcdef";
+  let res = "";
+  for (let i = 0; i < n; i++) {
+    res += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return res;
+}
+
 function compatible(a: RouletteFilters, b: RouletteFilters): boolean {
   if (a.gender !== "any" && b.gender !== "any" && a.gender !== b.gender) return false;
   if (a.lang !== "any" && b.lang !== "any" && a.lang !== b.lang) return false;
@@ -72,12 +77,14 @@ function compatible(a: RouletteFilters, b: RouletteFilters): boolean {
 }
 
 export class RouletteNet {
-  private peer: Peer | null = null;
+  private myPeer: Peer | null = null;
+  private myPeerId = "";
+  private beaconPeer: Peer | null = null;
   private mySlot = -1;
   private uid = browserUid();
   private myFilters: RouletteFilters = { gender: "any", lang: "any", tags: [] };
 
-  private partner: string | null = null;
+  private partnerId: string | null = null;
   private chatConn: DataConnection | null = null;
   private call: MediaConnection | null = null;
   private paired = false;
@@ -86,14 +93,16 @@ export class RouletteNet {
   private searching = false;
   private disposed = false;
   private probeTimer = 0;
-  private probeIdx = 0;
+  private probeIndex = 0;
+  private beaconAcquiring = false;
   private connectWatchdog = 0;
+  private fallbackInitiatorTimer = 0;
   private detachNet: (() => void) | null = null;
   private chatListeners = new Set<(t: string) => void>();
 
   private chatApi = {
     send: (text: string) => {
-      if (this.chatConn?.open) {
+      if (this.chatConn && this.chatConn.open) {
         try {
           this.chatConn.send({ t: "chat", text } satisfies Wire);
         } catch {
@@ -117,15 +126,34 @@ export class RouletteNet {
     return this.chatApi;
   }
 
-  /* ── публічне API ── */
+  updateStream(newStream: MediaStream) {
+    this.stream = newStream;
+    if (this.call?.peerConnection) {
+      try {
+        const senders = this.call.peerConnection.getSenders();
+        const videoTrack = newStream.getVideoTracks()[0];
+        const audioTrack = newStream.getAudioTracks()[0];
+        senders.forEach((sender) => {
+          if (sender.track?.kind === "video" && videoTrack) {
+            void sender.replaceTrack(videoTrack);
+          } else if (sender.track?.kind === "audio" && audioTrack) {
+            void sender.replaceTrack(audioTrack);
+          }
+        });
+      } catch {
+        /* noop */
+      }
+    }
+  }
+
+  /* ── Публічне API пошуку ── */
   search(f: RouletteFilters) {
     if (this.disposed) return;
     this.teardownPair();
     this.myFilters = f;
     this.searching = true;
     this.hooks.onState("searching");
-    if (!this.peer) this.acquire(this.rand(N_SLOTS));
-    this.startProbing();
+    this.initMyPeer();
   }
 
   next() {
@@ -133,190 +161,276 @@ export class RouletteNet {
     this.teardownPair();
     this.searching = true;
     this.hooks.onState("searching");
-    if (!this.peer) this.acquire(this.rand(N_SLOTS));
-    this.startProbing();
+    this.startSearchSwarm();
   }
 
   stop() {
     this.searching = false;
     this.teardownPair();
-    this.destroyPeer();
+    this.releaseBeacon();
+    this.destroyMyPeer();
     this.hooks.onState("idle");
     this.hooks.onIce?.("");
+    this.hooks.onSlot(-1);
   }
 
   dispose() {
     this.disposed = true;
     this.searching = false;
-    window.clearTimeout(this.connectWatchdog);
+    this.stopProbing();
     this.teardownPair();
-    this.destroyPeer();
+    this.releaseBeacon();
+    this.destroyMyPeer();
     this.detachNet?.();
     this.detachNet = null;
+    this.chatListeners.clear();
   }
 
-  /* ── отримання «домівки»: перебираємо слоти, поки не займемо вільний ── */
-  private acquire(start: number) {
-    if (this.peer || this.disposed || !this.searching) return;
-    let i = start;
-    const attempt = () => {
-      if (this.peer || this.disposed || !this.searching) return;
-      const slot = i % N_SLOTS;
-      const id = this.slotId(slot);
-      const p = new Peer(id, { debug: 0, config: iceConfig });
-      let settled = false;
-      const to = window.setTimeout(() => {
-        if (settled) return;
-        settled = true;
+  /* ── Ініціалізація основного вузла клієнта ── */
+  private initMyPeer() {
+    if (this.myPeer && !this.myPeer.destroyed && !this.myPeer.disconnected) {
+      this.startSearchSwarm();
+      return;
+    }
+    this.destroyMyPeer();
+
+    const newId = `viche-v3-u-${this.uid.slice(0, 6)}-${randHex(6)}`;
+    this.myPeerId = newId;
+    const p = new Peer(newId, { debug: 0, config: iceConfig });
+    this.myPeer = p;
+
+    p.on("open", (id) => {
+      if (this.disposed || !this.searching) {
         try {
           p.destroy();
         } catch {
           /* noop */
         }
-        i++;
-        attempt();
-      }, 3000);
-      p.on("open", () => {
-        if (settled) {
-          try {
-            p.destroy();
-          } catch {
-            /* noop */
-          }
-          return;
-        }
-        settled = true;
-        window.clearTimeout(to);
-        if (this.disposed || !this.searching || this.peer) {
-          try {
-            p.destroy();
-          } catch {
-            /* noop */
-          }
-          return;
-        }
-        this.adoptPeer(p, slot);
-      });
-      p.on("error", (e) => {
-        if (settled) return;
-        settled = true;
-        window.clearTimeout(to);
-        const t = (e as { type?: string }).type;
-        try {
-          p.destroy();
-        } catch {
-          /* noop */
-        }
-        if (this.disposed || !this.searching) return;
-        if (this.isFatal(t)) {
-          // брокер недоступний — спробуємо ще раз трохи згодом
-          window.setTimeout(() => attempt(), 2500);
-        } else {
-          // слот зайнятий або інша помилка — наступний
-          i++;
-          attempt();
-        }
-      });
-    };
-    attempt();
-  }
-
-  private adoptPeer(p: Peer, slot: number) {
-    this.peer = p;
-    this.mySlot = slot;
-    this.hooks.onSlot(slot);
-    // вхідні стуки (ми — «домівка»)
-    p.on("connection", (conn) => this.onIncoming(conn));
-    // вхідний медіа-виклик — відповідаємо лише своєму партнеру
-    p.on("call", (call) => {
-      if (this.paired && call.peer === this.partner) this.acceptCall(call);
-      else {
-        try {
-          call.close();
-        } catch {
-          /* noop */
-        }
+        return;
       }
+      this.myPeerId = id;
+      this.startSearchSwarm();
     });
+
+    p.on("connection", (conn) => {
+      this.onIncomingPeerConnection(conn);
+    });
+
+    p.on("call", (call) => {
+      this.onIncomingPeerCall(call);
+    });
+
     p.on("error", (e) => {
-      const t = (e as { type?: string }).type;
+      const err = e as { type?: string };
       if (this.disposed) return;
-      if (this.isFatal(t)) {
-        // втратили брокер — перепідключаємось
-        this.destroyPeer();
+      if (err.type === "peer-unavailable") {
+        // Звичайна ситуація при опитуванні відсутнього маяка — ігноруємо
+        return;
+      }
+      if (this.isFatal(err.type)) {
+        this.destroyMyPeer();
         if (this.searching && !this.paired) {
           window.setTimeout(() => {
-            if (this.searching && !this.disposed) this.acquire(this.rand(N_SLOTS));
-          }, 1500);
+            if (this.searching && !this.disposed) this.initMyPeer();
+          }, 1200);
+        }
+      }
+    });
+
+    p.on("disconnected", () => {
+      if (!this.disposed && this.searching && p === this.myPeer) {
+        try {
+          p.reconnect();
+        } catch {
+          /* noop */
         }
       }
     });
   }
 
-  /* ── обробка вхідних повідомлень (домівка) ── */
-  private onIncoming(conn: DataConnection) {
-    conn.on("data", (raw) => {
-      const m = raw as Wire;
-      if (!m?.t) return;
-      if (m.t === "knock") {
-        // свій браузер (друга вкладка / перезавантаження) → busy, не паруємось
-        if (this.paired || m.u === this.uid || !compatible(this.myFilters, m.f)) {
-          try {
-            conn.send({ t: "busy" } satisfies Wire);
-          } catch {
-            /* noop */
+  private startSearchSwarm() {
+    if (this.disposed || !this.searching || this.paired) return;
+    this.acquireBeaconSlot();
+    this.startProbing();
+  }
+
+  /* ── Управління маяком (Beacon Slot) ── */
+  private acquireBeaconSlot() {
+    if (this.beaconPeer || this.beaconAcquiring || this.disposed || !this.searching || this.paired) {
+      return;
+    }
+    this.beaconAcquiring = true;
+
+    const startSlot = Math.floor(Math.random() * N_SLOTS);
+    let current = startSlot;
+    let attempts = 0;
+
+    const tryNextBeacon = () => {
+      if (this.disposed || !this.searching || this.paired || this.beaconPeer) {
+        this.beaconAcquiring = false;
+        return;
+      }
+      if (attempts >= N_SLOTS) {
+        this.beaconAcquiring = false;
+        // повторимо спробу зайняти маяк через невеликий інтервал
+        window.setTimeout(() => {
+          if (this.searching && !this.paired && !this.beaconPeer) {
+            this.acquireBeaconSlot();
           }
-          window.setTimeout(() => {
-            try {
-              conn.close();
-            } catch {
-              /* noop */
-            }
-          }, 300);
-        } else {
-          this.finishPair(conn.peer);
-          try {
-            conn.send({ t: "accept", u: this.uid } satisfies Wire);
-          } catch {
-            /* noop */
-          }
-          window.setTimeout(() => {
-            try {
-              conn.close();
-            } catch {
-              /* noop */
-            }
-          }, 500);
+        }, 3000);
+        return;
+      }
+
+      attempts++;
+      const slotNum = current % N_SLOTS;
+      current++;
+      const slotId = this.slotId(slotNum);
+
+      const bp = new Peer(slotId, { debug: 0, config: iceConfig });
+      let settled = false;
+
+      const timeoutId = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        try {
+          bp.destroy();
+        } catch {
+          /* noop */
         }
-      } else if (m.t === "chello") {
-        // виділений чат-канал від партнера (ініціює той, чий ID менший)
-        if (conn.peer === this.partner && this.paired && !this.chatConn) {
-          this.chatConn = conn;
-          this.wireChat(conn);
-        } else {
+        tryNextBeacon();
+      }, 1500);
+
+      bp.on("open", () => {
+        if (settled) {
+          try {
+            bp.destroy();
+          } catch {
+            /* noop */
+          }
+          return;
+        }
+        settled = true;
+        window.clearTimeout(timeoutId);
+        this.beaconAcquiring = false;
+
+        if (this.disposed || !this.searching || this.paired) {
+          try {
+            bp.destroy();
+          } catch {
+            /* noop */
+          }
+          return;
+        }
+
+        this.beaconPeer = bp;
+        this.mySlot = slotNum;
+        this.hooks.onSlot(slotNum);
+
+        bp.on("connection", (conn) => {
+          this.handleBeaconIncoming(conn);
+        });
+
+        bp.on("error", (e) => {
+          const err = e as { type?: string };
+          if (err.type === "peer-unavailable") return;
+          this.releaseBeacon();
+          if (this.searching && !this.paired) {
+            window.setTimeout(() => this.acquireBeaconSlot(), 2000);
+          }
+        });
+      });
+
+      bp.on("error", () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeoutId);
+        try {
+          bp.destroy();
+        } catch {
+          /* noop */
+        }
+        tryNextBeacon();
+      });
+    };
+
+    tryNextBeacon();
+  }
+
+  private handleBeaconIncoming(conn: DataConnection) {
+    conn.on("data", (raw) => {
+      const msg = raw as Wire;
+      if (!msg || msg.t !== "knock") return;
+
+      // Свій же браузер або вже спарений або не підходять фільтри
+      if (
+        this.disposed ||
+        !this.searching ||
+        this.paired ||
+        msg.u === this.uid ||
+        !compatible(this.myFilters, msg.f)
+      ) {
+        try {
+          conn.send({ t: "busy" } satisfies Wire);
+        } catch {
+          /* noop */
+        }
+        window.setTimeout(() => {
           try {
             conn.close();
           } catch {
             /* noop */
           }
-        }
-      } else if (m.t === "chat") {
-        if (conn === this.chatConn) this.emitChat(m.text);
-      } else if (m.t === "bye") {
-        if (conn.peer === this.partner) this.partnerLeft();
+        }, 200);
+        return;
       }
-    });
-    conn.on("error", () => {
-      /* noop */
+
+      const partnerDirectId = msg.from;
+      if (!partnerDirectId) return;
+
+      // Приймаємо парування
+      try {
+        conn.send({
+          t: "accept",
+          from: this.myPeerId,
+          u: this.uid,
+        } satisfies Wire);
+      } catch {
+        /* noop */
+      }
+
+      window.setTimeout(() => {
+        try {
+          conn.close();
+        } catch {
+          /* noop */
+        }
+      }, 300);
+
+      this.startPairing(partnerDirectId);
     });
   }
 
-  /* ── «мандрівник»: безперервно стукаємо до інших слотів ── */
+  private releaseBeacon() {
+    this.beaconAcquiring = false;
+    if (this.beaconPeer) {
+      try {
+        this.beaconPeer.destroy();
+      } catch {
+        /* noop */
+      }
+      this.beaconPeer = null;
+    }
+    this.mySlot = -1;
+  }
+
+  /* ── Паралельне зондування маяків ── */
   private startProbing() {
     this.stopProbing();
-    this.probeIdx = this.rand(N_SLOTS);
-    this.probeTimer = window.setInterval(() => this.probe(), PROBE_EVERY);
-    this.probe();
+    this.probeIndex = Math.floor(Math.random() * N_SLOTS);
+    this.probeTimer = window.setInterval(() => {
+      this.probeStep();
+    }, PROBE_INTERVAL);
+    this.probeStep();
   }
 
   private stopProbing() {
@@ -326,17 +440,31 @@ export class RouletteNet {
     }
   }
 
-  private probe() {
-    if (!this.searching || this.paired || this.disposed || !this.peer) return;
-    const idx = this.probeIdx % N_SLOTS;
-    this.probeIdx++;
-    const target = this.slotId(idx);
-    if (idx === this.mySlot || target === this.peer.id) return; // не стукаємо до себе
-    const conn = this.peer.connect(target, { reliable: true });
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
+  private probeStep() {
+    if (this.disposed || !this.searching || this.paired || !this.myPeer || this.myPeer.destroyed) {
+      return;
+    }
+
+    // Виконуємо 2 зондування за цикл для прискореного пошуку
+    for (let k = 0; k < 2; k++) {
+      const idx = (this.probeIndex + k) % N_SLOTS;
+      if (idx !== this.mySlot) {
+        this.probeSlot(idx);
+      }
+    }
+    this.probeIndex = (this.probeIndex + 2) % N_SLOTS;
+  }
+
+  private probeSlot(slotIdx: number) {
+    if (this.disposed || !this.searching || this.paired || !this.myPeer) return;
+    const targetId = this.slotId(slotIdx);
+
+    const conn = this.myPeer.connect(targetId, { reliable: true });
+    let settled = false;
+
+    const cleanup = () => {
+      if (settled) return;
+      settled = true;
       window.clearTimeout(to);
       try {
         conn.close();
@@ -344,80 +472,147 @@ export class RouletteNet {
         /* noop */
       }
     };
-    const to = window.setTimeout(finish, KNOCK_TIMEOUT);
+
+    const to = window.setTimeout(cleanup, KNOCK_TIMEOUT);
+
     conn.on("open", () => {
-      if (done || this.paired) {
-        finish();
+      if (settled || this.paired || !this.searching) {
+        cleanup();
         return;
       }
       try {
-        conn.send({ t: "knock", f: this.myFilters, u: this.uid } satisfies Wire);
+        conn.send({
+          t: "knock",
+          from: this.myPeerId,
+          u: this.uid,
+          f: this.myFilters,
+        } satisfies Wire);
       } catch {
-        finish();
+        cleanup();
       }
     });
+
     conn.on("data", (raw) => {
-      const m = raw as Wire;
-      if (done) return;
-      if (m?.t === "accept") {
-        // відгукнувся наш власний браузер (примарний слот) → відхиляємо
-        if (this.paired || m.u === this.uid) {
-          finish();
+      const msg = raw as Wire;
+      if (settled) return;
+      if (msg?.t === "accept") {
+        if (this.paired || !this.searching || msg.u === this.uid) {
+          cleanup();
           return;
         }
-        this.finishPair(target);
-        finish(); // стук-канал більше не потрібен
-      } else if (m?.t === "busy") {
-        finish();
+        const partnerDirectId = msg.from;
+        if (partnerDirectId) {
+          this.startPairing(partnerDirectId);
+        }
+        cleanup();
+      } else if (msg?.t === "busy") {
+        cleanup();
       }
     });
-    conn.on("error", finish);
+
+    conn.on("error", cleanup);
+    conn.on("close", cleanup);
   }
 
-  /* ── парування (спільне для обох ролей) ── */
-  private finishPair(partnerId: string) {
-    if (this.paired || this.disposed) return;
+  /* ── Парування та встановлення WebRTC медіа і чату ── */
+  private startPairing(partnerDirectId: string) {
+    if (this.paired || this.disposed || !this.searching) return;
     this.paired = true;
     this.connected = false;
-    this.partner = partnerId;
+    this.partnerId = partnerDirectId;
+
     this.stopProbing();
+    this.releaseBeacon();
     this.hooks.onState("connecting");
 
-    // watchdog: якщо інша сторона обрала іншого партнера й відхилила нас,
-    // з'єднання не завершиться — повертаємось до пошуку замість зависання
+    // Watchdog на випадок, якщо партнер раптово зник
     window.clearTimeout(this.connectWatchdog);
     this.connectWatchdog = window.setTimeout(() => {
-      if (this.paired && !this.connected && !this.disposed) this.partnerLeft();
-    }, 8000);
+      if (this.paired && !this.connected && !this.disposed) {
+        this.partnerLeft();
+      }
+    }, 9000);
 
-    const iInitiate = this.cmp(this.peer!.id, partnerId) < 0;
-    if (iInitiate) {
-      // виділений чат-канал
-      const c = this.peer!.connect(partnerId, { reliable: true });
+    const isInitiator = this.cmp(this.myPeerId, partnerDirectId) < 0;
+
+    if (isInitiator) {
+      // Ініціатор створює чат і викликає медіа
+      this.initiateCallAndChat(partnerDirectId);
+    } else {
+      // Відповідач очікує вхідного виклику, а при затримці >3.5с ініціює страхувальний виклик
+      window.clearTimeout(this.fallbackInitiatorTimer);
+      this.fallbackInitiatorTimer = window.setTimeout(() => {
+        if (this.paired && !this.connected && !this.call && !this.disposed) {
+          this.initiateCallAndChat(partnerDirectId);
+        }
+      }, 3500);
+    }
+  }
+
+  private initiateCallAndChat(partnerDirectId: string) {
+    if (!this.myPeer || this.disposed || !this.paired) return;
+
+    if (!this.chatConn) {
+      const c = this.myPeer.connect(partnerDirectId, { reliable: true });
       this.chatConn = c;
       c.on("open", () => {
         try {
-          c.send({ t: "chello" } satisfies Wire);
+          c.send({ t: "chello", from: this.myPeerId } satisfies Wire);
         } catch {
           /* noop */
         }
       });
       this.wireChat(c);
-      // медіа-виклик
-      this.wireCall(this.peer!.call(partnerId, this.stream));
     }
-    // інакше чекаємо вхідні chello та call
+
+    if (!this.call) {
+      const call = this.myPeer.call(partnerDirectId, this.stream);
+      this.wireCall(call);
+    }
+  }
+
+  private onIncomingPeerConnection(conn: DataConnection) {
+    if (!this.paired || conn.peer !== this.partnerId) {
+      // Не від нашого поточного партнера
+      return;
+    }
+    if (!this.chatConn) {
+      this.chatConn = conn;
+      this.wireChat(conn);
+    }
+  }
+
+  private onIncomingPeerCall(call: MediaConnection) {
+    if (!this.paired || call.peer !== this.partnerId) {
+      try {
+        call.close();
+      } catch {
+        /* noop */
+      }
+      return;
+    }
+    window.clearTimeout(this.fallbackInitiatorTimer);
+    call.answer(this.stream);
+    this.wireCall(call);
   }
 
   private wireChat(c: DataConnection) {
     c.on("data", (raw) => {
       const m = raw as Wire;
-      if (m?.t === "chat") this.emitChat(m.text);
-      else if (m?.t === "bye") this.partnerLeft();
+      if (!m) return;
+      if (m.t === "chat") {
+        this.emitChat(m.text);
+      } else if (m.t === "bye") {
+        this.partnerLeft();
+      }
     });
+
     c.on("close", () => {
-      if (this.chatConn === c && this.paired) this.partnerLeft();
+      if (this.chatConn === c && this.paired) {
+        this.partnerLeft();
+      }
     });
+
     c.on("error", () => {
       /* noop */
     });
@@ -425,23 +620,37 @@ export class RouletteNet {
 
   private wireCall(call: MediaConnection) {
     this.call = call;
+    let streamEmitted = false;
     let restarted = false;
-    call.on("stream", (s) => {
-      if (this.disposed) return;
+
+    const emitStream = (s: MediaStream) => {
+      if (streamEmitted || this.disposed || !this.paired) return;
+      streamEmitted = true;
       this.connected = true;
       window.clearTimeout(this.connectWatchdog);
+      window.clearTimeout(this.fallbackInitiatorTimer);
       this.hooks.onState("paired");
-      this.hooks.onPair(s, this.partner ?? "");
+      this.hooks.onPair(s, this.partnerId ?? "");
+    };
+
+    call.on("stream", (s) => {
+      emitStream(s);
     });
-    call.on("close", () => {
-      if (this.paired) this.partnerLeft();
-    });
-    call.on("error", () => {
-      /* noop */
-    });
+
     const pc = call.peerConnection;
     if (pc) {
       this.hooks.onIce?.("connecting");
+
+      // Страховка через native ontrack
+      pc.ontrack = (e) => {
+        if (e.streams && e.streams[0]) {
+          emitStream(e.streams[0]);
+        } else if (e.track) {
+          const fallbackStream = new MediaStream([e.track]);
+          emitStream(fallbackStream);
+        }
+      };
+
       try {
         pc.addEventListener("connectionstatechange", () => {
           if (this.disposed) return;
@@ -459,15 +668,25 @@ export class RouletteNet {
             this.hooks.onIce?.(st);
           }
         });
+
+        pc.addEventListener("iceconnectionstatechange", () => {
+          if (this.disposed) return;
+          if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+            void icePathInfo(pc).then((tp) => this.hooks.onIce?.(tp));
+          }
+        });
       } catch {
         /* noop */
       }
     }
-  }
 
-  private acceptCall(call: MediaConnection) {
-    call.answer(this.stream);
-    this.wireCall(call);
+    call.on("close", () => {
+      if (this.paired) this.partnerLeft();
+    });
+
+    call.on("error", () => {
+      /* noop */
+    });
   }
 
   private partnerLeft() {
@@ -475,19 +694,20 @@ export class RouletteNet {
     this.teardownPair();
     this.hooks.onIce?.("");
     this.hooks.onPeerLeft();
-    // одразу шукаємо наступного — БЕЗ жодних ботів
+
     if (this.searching) {
       this.hooks.onState("searching");
-      if (!this.peer) this.acquire(this.rand(N_SLOTS));
-      this.startProbing();
+      this.startSearchSwarm();
     }
   }
 
   private teardownPair() {
     this.paired = false;
     this.connected = false;
-    this.partner = null;
+    this.partnerId = null;
     window.clearTimeout(this.connectWatchdog);
+    window.clearTimeout(this.fallbackInitiatorTimer);
+
     if (this.chatConn) {
       try {
         this.chatConn.send({ t: "bye" } satisfies Wire);
@@ -501,6 +721,7 @@ export class RouletteNet {
       }
       this.chatConn = null;
     }
+
     if (this.call) {
       try {
         this.call.close();
@@ -509,32 +730,31 @@ export class RouletteNet {
       }
       this.call = null;
     }
+
     this.stopProbing();
   }
 
-  private destroyPeer() {
-    this.stopProbing();
-    if (this.peer) {
+  private destroyMyPeer() {
+    if (this.myPeer) {
       try {
-        this.peer.destroy();
+        this.myPeer.destroy();
       } catch {
         /* noop */
       }
-      this.peer = null;
+      this.myPeer = null;
     }
-    this.mySlot = -1;
+    this.myPeerId = "";
   }
 
-  /* ── допоміжне ── */
+  /* ── Допоміжні методи ── */
   private slotId(i: number) {
-    return PREFIX + String(i).padStart(3, "0");
+    return BEACON_PREFIX + String(i).padStart(2, "0");
   }
-  private rand(n: number) {
-    return Math.floor(Math.random() * n);
-  }
+
   private cmp(a: string, b: string) {
     return a < b ? -1 : a > b ? 1 : 0;
   }
+
   private isFatal(t?: string) {
     return (
       t === "network" ||
@@ -544,6 +764,7 @@ export class RouletteNet {
       t === "disconnected"
     );
   }
+
   private emitChat(text: string) {
     this.chatListeners.forEach((fn) => fn(text));
   }

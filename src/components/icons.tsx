@@ -87,6 +87,11 @@ export const IconFull = ({ className }: P) => (
     <path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M16 3h3a2 2 0 0 1 2 2v3" /><path d="M8 21H5a2 2 0 0 1-2-2v-3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" />
   </S>
 );
+export const IconExitFull = ({ className }: P) => (
+  <S className={className}>
+    <path d="M4 14h6v6" /><path d="m10 14-7 7" /><path d="M20 10h-6V4" /><path d="m14 10 7-7" />
+  </S>
+);
 export const IconClose = ({ className }: P) => (
   <S className={className}>
     <path d="M18 6 6 18" /><path d="m6 6 12 12" />

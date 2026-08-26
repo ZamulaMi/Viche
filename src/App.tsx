@@ -165,13 +165,13 @@ function Shell() {
       <div className="fixed inset-0 noise pointer-events-none z-[60]" aria-hidden />
       <div className="fixed inset-0 vignette pointer-events-none" aria-hidden />
 
-      <div className="relative z-10 flex flex-col min-h-screen">
+      <div className="relative z-10 flex flex-col min-h-[100dvh]">
         {/* ── Шапка ── */}
         <header className="sticky top-0 z-40 border-b border-[var(--c-line)] bg-[color-mix(in_srgb,var(--c-bg)_85%,transparent)] backdrop-blur-md">
-          <div className="max-w-[1400px] mx-auto w-full px-4 sm:px-6 h-[60px] flex items-center gap-4">
+          <div className="max-w-[1400px] mx-auto w-full px-3 sm:px-6 h-[52px] sm:h-[60px] flex items-center gap-3 sm:gap-4">
             <a
               href="/"
-              className="flex items-center gap-3 group"
+              className="flex items-center gap-2.5 sm:gap-3 group min-w-0"
               onClick={(e) => {
                 e.preventDefault();
                 setView("roulette");
@@ -179,20 +179,20 @@ function Shell() {
               }}
               aria-label="Viche — home"
             >
-              <LogoMark className="w-9 h-9 transition-transform group-hover:rotate-6" />
-              <span className="text-left leading-none">
-                <span className="font-display font-900 text-[19px] tracking-[0.08em] block group-hover:text-[var(--c-amber)] transition-colors">{brand}</span>
-                <span className="font-mono text-[10px] text-[var(--c-faint)] tracking-wide">{t("brand.tag")}</span>
+              <LogoMark className="w-8 h-8 sm:w-9 sm:h-9 flex-none transition-transform group-hover:rotate-6" />
+              <span className="text-left leading-none truncate">
+                <span className="font-display font-900 text-[17px] sm:text-[19px] tracking-[0.08em] block group-hover:text-[var(--c-amber)] transition-colors">{brand}</span>
+                <span className="font-mono text-[9.5px] sm:text-[10px] text-[var(--c-faint)] tracking-wide">{t("brand.tag")}</span>
               </span>
             </a>
 
-            <div className="ml-auto flex items-center gap-2">
+            <div className="ml-auto flex items-center gap-1.5 sm:gap-2 flex-none">
               <div className="flex rounded-lg border border-[var(--c-line2)] overflow-hidden">
                 {(["uk", "en"] as Lang[]).map((l) => (
                   <button
                     key={l}
                     onClick={() => setLang(l)}
-                    className={`px-2.5 py-1.5 font-mono text-[11px] font-700 tracking-wider transition-colors ${
+                    className={`px-2 sm:px-2.5 py-1 sm:py-1.5 font-mono text-[10.5px] sm:text-[11px] font-700 tracking-wider transition-colors ${
                       lang === l ? "bg-[var(--c-amber)] text-[#14100a]" : "text-[var(--c-dim)] hover:text-[var(--c-text)]"
                     }`}
                   >
@@ -201,20 +201,20 @@ function Shell() {
                 ))}
               </div>
               <button
-                className="btn btn-icon"
+                className="btn btn-icon !p-2 sm:!p-2.5"
                 onClick={() => setTheme((v) => (v === "dark" ? "light" : "dark"))}
                 title="theme"
                 aria-label="toggle theme"
               >
-                {theme === "dark" ? <IconSun className="w-5 h-5" /> : <IconMoon className="w-5 h-5" />}
+                {theme === "dark" ? <IconSun className="w-4 h-4 sm:w-5 sm:h-5" /> : <IconMoon className="w-4 h-4 sm:w-5 sm:h-5" />}
               </button>
             </div>
           </div>
         </header>
 
-        <div className="flex-1 flex max-w-[1400px] mx-auto w-full px-4 sm:px-6">
+        <div className="flex-1 flex max-w-[1400px] mx-auto w-full px-2.5 sm:px-6">
           {/* ── Рейка навігації (desktop) ── */}
-          <aside className="hidden lg:flex flex-col w-48 flex-none py-7 pr-5 gap-1.5">
+          <aside className="hidden lg:flex flex-col w-48 flex-none py-6 pr-5 gap-1.5">
             {NAV.map((n) => (
               <button
                 key={n.v}
@@ -243,7 +243,7 @@ function Shell() {
           </aside>
 
           {/* ── Контент ── */}
-          <main className="flex-1 min-w-0 py-6 pb-28 lg:pb-10">
+          <main className="flex-1 min-w-0 py-2 sm:py-5 pb-20 sm:pb-24 lg:pb-8 flex flex-col">
             <div className={view === "roulette" ? "block" : "hidden"}>
               <Roulette localMedia={localMedia} ensureLocal={ensureLocal} releaseMedia={releaseMedia} onToast={push} />
             </div>
@@ -254,28 +254,28 @@ function Shell() {
         </div>
 
         {/* ── Футер ── */}
-        <footer className="border-t border-[var(--c-line)] mt-auto">
-          <div className="max-w-[1400px] mx-auto w-full px-4 sm:px-6 py-4 flex flex-col sm:flex-row gap-2 sm:items-center">
-            <p className="font-mono text-[10.5px] text-[var(--c-faint)] leading-relaxed max-w-2xl">{t("footer.demo")}</p>
-            <p className="sm:ml-auto font-mono text-[10.5px] text-[var(--c-faint)] whitespace-nowrap">
+        <footer className="hidden sm:block border-t border-[var(--c-line)] mt-auto">
+          <div className="max-w-[1400px] mx-auto w-full px-4 sm:px-6 py-3 sm:py-4 flex flex-col sm:flex-row gap-2 sm:items-center">
+            <p className="font-mono text-[10px] sm:text-[10.5px] text-[var(--c-faint)] leading-relaxed max-w-2xl">{t("footer.demo")}</p>
+            <p className="sm:ml-auto font-mono text-[10px] sm:text-[10.5px] text-[var(--c-faint)] whitespace-nowrap">
               go 1.22 · react 18 · webrtc · <span className="text-[var(--c-mint)]">viche v0.9</span>
             </p>
           </div>
         </footer>
 
         {/* ── Мобільна навігація ── */}
-        <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 grid grid-cols-2 border-t border-[var(--c-line)] bg-[color-mix(in_srgb,var(--c-bg)_90%,transparent)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
+        <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 grid grid-cols-2 border-t border-[var(--c-line)] bg-[color-mix(in_srgb,var(--c-bg)_92%,transparent)] backdrop-blur-lg pb-[env(safe-area-inset-bottom)] shadow-lg">
           {NAV.map((n) => (
             <button
               key={n.v}
               onClick={() => setView(n.v)}
-              className={`flex flex-col items-center gap-1 py-2.5 transition-colors ${
+              className={`flex flex-col items-center justify-center gap-1 py-2 min-h-[50px] transition-colors ${
                 view === n.v ? "text-[var(--c-amber)]" : "text-[var(--c-dim)]"
               }`}
             >
               {n.icon}
-              <span className="text-[10px] font-700">{t(n.key as never)}</span>
-              <span className={`h-[3px] w-8 rounded-full transition-all ${view === n.v ? "bg-[var(--c-amber)]" : "bg-transparent"}`} />
+              <span className="text-[10.5px] font-700">{t(n.key as never)}</span>
+              <span className={`h-[2.5px] w-7 rounded-full transition-all ${view === n.v ? "bg-[var(--c-amber)]" : "bg-transparent"}`} />
             </button>
           ))}
         </nav>

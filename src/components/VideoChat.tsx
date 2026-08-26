@@ -9,6 +9,7 @@ import {
   IconChat,
   IconClose,
   IconEnd,
+  IconExitFull,
   IconFlag,
   IconFull,
   IconMic,
@@ -60,6 +61,7 @@ export default function VideoChat({
   const [camOn, setCamOn] = useState(true);
   const [speaking, setSpeaking] = useState(false);
   const [cool, setCool] = useState(false);
+  const [isFull, setIsFull] = useState(false);
 
   const peerLang = peer.langs.includes("uk") ? "uk" : "en";
 
@@ -95,6 +97,32 @@ export default function VideoChat({
       window.clearTimeout(sys);
     };
   }, [peer.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* відстеження повноекранного режиму */
+  useEffect(() => {
+    const onFsChange = () => {
+      const fsEl =
+        document.fullscreenElement ||
+        (document as unknown as { webkitFullscreenElement?: Element }).webkitFullscreenElement;
+      setIsFull(!!fsEl);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && isFull) {
+        exitFs();
+      }
+    };
+    document.addEventListener("fullscreenchange", onFsChange);
+    document.addEventListener("webkitfullscreenchange", onFsChange);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFsChange);
+      document.removeEventListener("webkitfullscreenchange", onFsChange);
+      window.removeEventListener("keydown", onKey);
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      }
+    };
+  }, [isFull]);
 
   /* індикатор мовлення: реальний VAD за аудіо-треком, для демо — симуляція */
   useEffect(() => {
@@ -224,16 +252,58 @@ export default function VideoChat({
       return !v;
     });
   };
-  const fullscreen = () => {
+
+  const enterFs = () => {
     const el = boxRef.current;
+    setIsFull(true);
     if (!el) return;
-    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-    else el.requestFullscreen?.().catch(() => {});
+    try {
+      if (el.requestFullscreen) {
+        void el.requestFullscreen().catch(() => {});
+      } else if ((el as unknown as { webkitRequestFullscreen?: () => void }).webkitRequestFullscreen) {
+        (el as unknown as { webkitRequestFullscreen: () => void }).webkitRequestFullscreen();
+      }
+    } catch {
+      /* fallback CSS mode is active */
+    }
+  };
+
+  const exitFs = () => {
+    setIsFull(false);
+    try {
+      const fsEl =
+        document.fullscreenElement ||
+        (document as unknown as { webkitFullscreenElement?: Element }).webkitFullscreenElement;
+      if (fsEl) {
+        if (document.exitFullscreen) {
+          void document.exitFullscreen().catch(() => {});
+        } else if ((document as unknown as { webkitExitFullscreen?: () => void }).webkitExitFullscreen) {
+          (document as unknown as { webkitExitFullscreen: () => void }).webkitExitFullscreen();
+        }
+      }
+    } catch {
+      /* noop */
+    }
+  };
+
+  const toggleFullscreen = () => {
+    if (isFull) {
+      exitFs();
+    } else {
+      enterFs();
+    }
   };
 
   return (
-    <div ref={boxRef} className="absolute inset-0 overflow-hidden bg-black">
-      {/* remote: чисте відео без обрізки й без жодних ефектів */}
+    <div
+      ref={boxRef}
+      className={`${
+        isFull
+          ? "fixed inset-0 z-[90] w-screen h-[100dvh] bg-black overflow-hidden"
+          : "absolute inset-0 bg-black overflow-visible"
+      }`}
+    >
+      {/* remote: чисте відео без обрізки й без жодних спотворень */}
       <video
         ref={remoteRef}
         autoPlay
@@ -248,19 +318,19 @@ export default function VideoChat({
       />
 
       {/* верхня панель: статус + пір */}
-      <div className="absolute top-3 left-3 right-3 flex items-start justify-between gap-3 z-20">
-        <div className="flex items-center gap-2.5 rounded-xl bg-[color-mix(in_srgb,var(--c-bg)_72%,transparent)] backdrop-blur-md border border-[var(--c-line)] px-3.5 py-2">
+      <div className="absolute top-2 sm:top-3 left-2 sm:left-3 right-2 sm:right-3 pt-[env(safe-area-inset-top,0px)] flex items-start justify-between gap-2 z-20 pointer-events-none">
+        <div className="flex items-center gap-2 sm:gap-2.5 rounded-xl bg-[color-mix(in_srgb,var(--c-bg)_76%,transparent)] backdrop-blur-md border border-[var(--c-line)] px-2.5 sm:px-3.5 py-1.5 sm:py-2 pointer-events-auto shadow-sm">
           <span className="led led-mint" />
           <div className="leading-tight">
-            <p className="font-mono text-[10px] tracking-[0.18em] text-[var(--c-mint)]">{t("state.live")}</p>
-            <p className="text-sm font-700 text-[var(--c-text)]">
+            <p className="font-mono text-[9px] sm:text-[10px] tracking-[0.18em] text-[var(--c-mint)]">{t("state.live")}</p>
+            <p className="text-xs sm:text-sm font-700 text-[var(--c-text)] truncate max-w-[140px] sm:max-w-[200px]">
               {peer.name}
-              {!peer.real && <span className="font-mono text-[11px] text-[var(--c-dim)]"> · {peer.ping} ms</span>}
-              {peer.real && <span className="font-mono text-[11px] text-[var(--c-mint)]"> · p2p</span>}
+              {!peer.real && <span className="font-mono text-[10px] sm:text-[11px] text-[var(--c-dim)]"> · {peer.ping}ms</span>}
+              {peer.real && <span className="font-mono text-[10px] sm:text-[11px] text-[var(--c-mint)]"> · p2p</span>}
             </p>
           </div>
         </div>
-        <div className="hidden sm:flex flex-col items-end gap-1.5">
+        <div className="hidden sm:flex flex-col items-end gap-1.5 pointer-events-auto">
           <div className="flex items-end gap-[3px] h-7 px-3 rounded-lg bg-[color-mix(in_srgb,var(--c-bg)_72%,transparent)] backdrop-blur-md border border-[var(--c-line)]">
             {[0, 1, 2, 3].map((i) => (
               <span
@@ -287,19 +357,19 @@ export default function VideoChat({
       </div>
 
       {/* локальне відео (PiP) */}
-      <div className="absolute right-3 bottom-[92px] sm:bottom-24 w-28 sm:w-44 aspect-[4/3] rounded-lg overflow-hidden border border-[var(--c-line2)] shadow-[var(--c-shadow)] z-20 bg-[var(--c-bg2)]">
+      <div className="absolute right-2 sm:right-3 bottom-14 sm:bottom-20 w-22 sm:w-36 md:w-44 aspect-[4/3] rounded-lg overflow-hidden border border-[var(--c-line2)] shadow-[var(--c-shadow)] z-20 bg-[var(--c-bg2)]">
         {localMedia?.isReal ? (
           <video ref={localRef} autoPlay playsInline muted className="w-full h-full object-contain bg-[var(--c-bg2)]" />
         ) : (
           <div className="w-full h-full grid place-items-center">
-            <span className="font-display text-2xl text-[var(--c-amber)]">TI</span>
+            <span className="font-display text-xl sm:text-2xl text-[var(--c-amber)]">TI</span>
           </div>
         )}
-        {!camOn && <div className="absolute inset-0 bg-[var(--c-bg)] grid place-items-center"><IconCamOff className="w-6 h-6 text-[var(--c-faint)]" /></div>}
-        <span className="absolute top-1.5 left-2 font-mono text-[10px] tracking-widest text-[var(--c-mint)]">{t("video.you")}</span>
+        {!camOn && <div className="absolute inset-0 bg-[var(--c-bg)] grid place-items-center"><IconCamOff className="w-5 h-5 sm:w-6 sm:h-6 text-[var(--c-faint)]" /></div>}
+        <span className="absolute top-1 left-1.5 font-mono text-[9px] sm:text-[10px] tracking-widest text-[var(--c-mint)]">{t("video.you")}</span>
       </div>
       {!localMedia?.hasCam && (
-        <p className="absolute right-3 bottom-[76px] sm:bottom-[84px] z-20 font-mono text-[10px] text-[var(--c-amber)] bg-[color-mix(in_srgb,var(--c-bg)_72%,transparent)] backdrop-blur-md rounded-md px-2 py-1 border border-[var(--c-line)]">
+        <p className="absolute right-2 sm:right-3 bottom-12 sm:bottom-[72px] z-20 font-mono text-[9.5px] sm:text-[10px] text-[var(--c-amber)] bg-[color-mix(in_srgb,var(--c-bg)_78%,transparent)] backdrop-blur-md rounded-md px-1.5 sm:px-2 py-0.5 border border-[var(--c-line)]">
           {t("video.noCam")}
         </p>
       )}
@@ -308,20 +378,20 @@ export default function VideoChat({
       <div
         className={`absolute z-30 transition-all duration-300 ${
           chatOpen ? "opacity-100 translate-x-0" : "opacity-0 translate-x-6 pointer-events-none"
-        } top-16 bottom-24 right-3 w-[248px] sm:w-72 flex flex-col card overflow-hidden !bg-[color-mix(in_srgb,var(--c-panel)_86%,transparent)] backdrop-blur-md`}
+        } top-12 sm:top-16 bottom-14 sm:bottom-20 right-2 sm:right-3 w-[calc(100%-16px)] sm:w-72 max-w-[320px] flex flex-col card overflow-hidden !bg-[color-mix(in_srgb,var(--c-panel)_88%,transparent)] backdrop-blur-md shadow-2xl`}
       >
-        <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-[var(--c-line)]">
+        <div className="flex items-center justify-between px-3 py-2 sm:px-3.5 sm:py-2.5 border-b border-[var(--c-line)]">
           <span className="panel-title">{t("chat.title")}</span>
-          <button className="text-[var(--c-faint)] hover:text-[var(--c-text)] transition-colors" onClick={() => setChatOpen(false)} aria-label="close chat">
+          <button className="text-[var(--c-faint)] hover:text-[var(--c-text)] transition-colors p-1" onClick={() => setChatOpen(false)} aria-label="close chat">
             <IconClose className="w-4 h-4" />
           </button>
         </div>
-        <div ref={listRef} className="flex-1 overflow-y-auto px-3 py-2.5 space-y-2">
+        <div ref={listRef} className="flex-1 overflow-y-auto px-3 py-2 space-y-2">
           {msgs.length === 0 && <p className="text-[12px] text-[var(--c-faint)] italic py-2">{t("chat.empty")}</p>}
           {msgs.map((m) => (
-            <div key={m.id} className={`logline text-[13px] leading-snug ${m.from === "you" ? "text-right" : ""}`}>
-              {m.from === "sys" && <p className="font-mono text-[11px] text-[var(--c-faint)]">— {m.text} —</p>}
-              {m.from === "warn" && <p className="font-mono text-[11px] text-[var(--c-amber)]">⚠ {m.text}</p>}
+            <div key={m.id} className={`logline text-[12.5px] sm:text-[13px] leading-snug ${m.from === "you" ? "text-right" : ""}`}>
+              {m.from === "sys" && <p className="font-mono text-[10.5px] sm:text-[11px] text-[var(--c-faint)]">— {m.text} —</p>}
+              {m.from === "warn" && <p className="font-mono text-[10.5px] sm:text-[11px] text-[var(--c-amber)]">⚠ {m.text}</p>}
               {(m.from === "peer" || m.from === "you") && (
                 <span
                   className={`inline-block max-w-full text-left px-2.5 py-1.5 rounded-lg break-words ${
@@ -339,48 +409,59 @@ export default function VideoChat({
         </div>
         <div className="p-2 border-t border-[var(--c-line)] flex gap-1.5">
           <input
-            className="input !py-2 !text-[13px]"
+            className="input !py-1.5 sm:!py-2 !text-[12.5px] sm:!text-[13px]"
             placeholder={t("chat.ph")}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && send()}
           />
-          <button className="btn btn-amber btn-icon !rounded-lg" onClick={send} aria-label={t("chat.ph")}>
+          <button className="btn btn-amber btn-icon !p-2 !rounded-lg" onClick={send} aria-label={t("chat.ph")}>
             <IconSend className="w-4 h-4" />
           </button>
         </div>
       </div>
 
       {/* панель керування */}
-      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-2.5 py-2 rounded-xl bg-[color-mix(in_srgb,var(--c-bg)_78%,transparent)] backdrop-blur-md border border-[var(--c-line)] shadow-[var(--c-shadow)]">
-        <button className={`btn btn-icon ${!micOn ? "!text-[var(--c-red)] !border-[color-mix(in_srgb,var(--c-red)_50%,transparent)]" : ""}`} onClick={toggleMic} title={t("video.mic")}>
-          {micOn ? <IconMic className="w-5 h-5" /> : <IconMicOff className="w-5 h-5" />}
-        </button>
-        <button className={`btn btn-icon ${!camOn ? "!text-[var(--c-red)] !border-[color-mix(in_srgb,var(--c-red)_50%,transparent)]" : ""}`} onClick={toggleCam} title={t("video.cam")}>
-          {camOn ? <IconCam className="w-5 h-5" /> : <IconCamOff className="w-5 h-5" />}
-        </button>
-        <button className="btn btn-icon relative" onClick={() => { setChatOpen((v) => !v); setUnread(0); }} title={t("chat.title")}>
-          <IconChat className="w-5 h-5" />
-          {unread > 0 && !chatOpen && (
-            <span className="absolute -top-1.5 -right-1.5 min-w-[17px] h-[17px] grid place-items-center rounded-full bg-[var(--c-amber)] text-[#14100a] font-mono text-[10px] font-700 px-1">
-              {unread}
-            </span>
-          )}
-        </button>
-        <button className="btn btn-icon hidden sm:inline-flex" onClick={fullscreen} title={t("video.full")}>
-          <IconFull className="w-5 h-5" />
-        </button>
-        <span className="w-px h-7 bg-[var(--c-line2)] mx-0.5" />
-        <button className="btn btn-red btn-icon" onClick={() => onLeave("end")} title={t("ctl.end")}>
-          <IconEnd className="w-5 h-5" />
-        </button>
-        <button className="btn btn-amber !px-5" onClick={() => onLeave("next")}>
-          <IconNext className="w-5 h-5" />
-          {t("ctl.next")}
-        </button>
-        <button className={`btn btn-icon ${cool ? "opacity-40" : "!text-[var(--c-amber)]"}`} onClick={report} title={t("ctl.report")}>
-          <IconFlag className="w-5 h-5" />
-        </button>
+      <div className="absolute bottom-2 sm:bottom-4 left-1/2 -translate-x-1/2 z-30 flex justify-center px-1 pointer-events-none pb-[env(safe-area-inset-bottom,0px)] w-max max-w-full">
+        <div className="pointer-events-auto flex items-center justify-center gap-1.5 sm:gap-2 p-1 overflow-visible">
+          <button className={`btn btn-icon !p-2 sm:!p-2.5 ${!micOn ? "!text-[var(--c-red)] !border-[color-mix(in_srgb,var(--c-red)_50%,transparent)]" : ""}`} onClick={toggleMic} title={t("video.mic")}>
+            {micOn ? <IconMic className="w-4 h-4 sm:w-5 sm:h-5" /> : <IconMicOff className="w-4 h-4 sm:w-5 sm:h-5" />}
+          </button>
+          <button className={`btn btn-icon !p-2 sm:!p-2.5 ${!camOn ? "!text-[var(--c-red)] !border-[color-mix(in_srgb,var(--c-red)_50%,transparent)]" : ""}`} onClick={toggleCam} title={t("video.cam")}>
+            {camOn ? <IconCam className="w-4 h-4 sm:w-5 sm:h-5" /> : <IconCamOff className="w-4 h-4 sm:w-5 sm:h-5" />}
+          </button>
+          <button className="btn btn-icon !p-2 sm:!p-2.5 relative" onClick={() => { setChatOpen((v) => !v); setUnread(0); }} title={t("chat.title")}>
+            <IconChat className="w-4 h-4 sm:w-5 sm:h-5" />
+            {unread > 0 && !chatOpen && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-[17px] h-[17px] grid place-items-center rounded-full bg-[var(--c-amber)] text-[#14100a] font-mono text-[10px] font-700 px-1">
+                {unread}
+              </span>
+            )}
+          </button>
+          <button
+            className={`btn btn-icon !p-2 sm:!p-2.5 inline-flex ${isFull ? "!text-[var(--c-amber)] !border-[color-mix(in_srgb,var(--c-amber)_50%,transparent)] bg-[color-mix(in_srgb,var(--c-amber)_15%,transparent)]" : ""}`}
+            onClick={toggleFullscreen}
+            title={isFull ? t("video.exitFull") : t("video.full")}
+            aria-label={isFull ? t("video.exitFull") : t("video.full")}
+          >
+            {isFull ? <IconExitFull className="w-4 h-4 sm:w-5 sm:h-5" /> : <IconFull className="w-4 h-4 sm:w-5 sm:h-5" />}
+          </button>
+          <span className="w-px h-6 sm:h-7 bg-[var(--c-line2)] mx-0.5 flex-none opacity-70" />
+          <button
+            className="btn btn-red btn-icon !p-2 sm:!p-2.5 !bg-[color-mix(in_srgb,var(--c-red)_40%,transparent)] !border-[var(--c-red)] !text-[var(--c-red)] hover:!bg-[color-mix(in_srgb,var(--c-red)_60%,transparent)] backdrop-blur-md shadow-[0_0_16px_-2px_color-mix(in_srgb,var(--c-red)_40%,transparent)]"
+            onClick={() => onLeave("end")}
+            title={t("ctl.end")}
+          >
+            <IconEnd className="w-4 h-4 sm:w-5 sm:h-5" />
+          </button>
+          <button className="btn btn-amber !px-3.5 sm:!px-5 !py-2 !text-xs sm:!text-sm font-700 whitespace-nowrap" onClick={() => onLeave("next")}>
+            <IconNext className="w-4 h-4 sm:w-5 sm:h-5" />
+            {t("ctl.next")}
+          </button>
+          <button className={`btn btn-icon !p-2 sm:!p-2.5 ${cool ? "opacity-40" : "!text-[var(--c-amber)]"}`} onClick={report} title={t("ctl.report")}>
+            <IconFlag className="w-4 h-4 sm:w-5 sm:h-5" />
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -46,6 +46,9 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
   }, [filters]);
   useEffect(() => {
     lmRef.current = localMedia;
+    if (localMedia && netRef.current) {
+      netRef.current.updateStream(localMedia.stream);
+    }
   }, [localMedia]);
   useEffect(() => {
     tRef.current = t;
@@ -73,7 +76,10 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
   }, [busy]);
 
   const openNet = useCallback((lm: LocalMedia) => {
-    if (netRef.current) return netRef.current;
+    if (netRef.current) {
+      netRef.current.updateStream(lm.stream);
+      return netRef.current;
+    }
     const net = new RouletteNet(lm.stream, {
       onState: (s) => {
         if (!liveRef.current) return;
@@ -84,7 +90,7 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
       onSlot: (sl) => setSlot(sl),
       onPair: (stream, peerId) => {
         if (!liveRef.current) return;
-        const tail = peerId.replace(/[^0-9]/g, "") || peerId.slice(-3);
+        const tail = peerId.replace(/[^0-9a-zA-Z]/g, "").slice(-4) || shortId(4);
         const p: Peer = {
           ...makePeer({ tags: [], langs: [] }),
           id: tail,
@@ -103,7 +109,7 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
         setIce("");
         setElapsed(0);
         toastRef.current(tRef.current("toast.peerLeft"), "warn");
-        // пошук відновлює сам net — жодних ботів
+        // пошук відновлює сам net — без ботів
       },
       onIce: (i) => setIce(i),
     });
@@ -146,6 +152,7 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
     setElapsed(0);
     setOrient("land");
     setIce("");
+    setSlot(-1);
     setPhase("idle");
     // після завершення розмови камера/мікрофон вимикаються повністю
     releaseMedia();
@@ -183,14 +190,10 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
   return (
     <div>
       <div className="min-w-0">
-        {/* ── Сцена: 4:3 для горизонтального відео, 3:4 для вертикального ── */}
-        <div className="card overflow-hidden">
+        {/* ── Сцена: карточка сцени .card ── */}
+        <div className="card overflow-hidden relative w-full">
           <div
-            className={`relative bg-[var(--c-bg2)] overflow-hidden ${
-              orient === "port"
-                ? "aspect-[3/4] max-w-[500px] sm:max-w-[560px] mx-auto"
-                : "aspect-[4/3] max-w-[900px] mx-auto"
-            }`}
+            className="relative bg-[var(--c-bg2)] transition-all duration-300 aspect-[4/3] max-h-[min(48dvh,500px)] sm:max-h-[min(66dvh,640px)] min-h-[230px] w-full mx-auto overflow-hidden"
           >
             {phase === "live" && peer ? (
               <VideoChat
@@ -205,56 +208,56 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
                 onToast={onToast}
               />
             ) : (
-              <div className="absolute inset-0 grid place-items-center scanlines">
-                <div className="absolute w-[420px] h-[420px] rounded-full border border-[var(--c-line)] opacity-60" />
-                <div className="absolute w-[300px] h-[300px] rounded-full border border-[var(--c-line)] opacity-80" />
+              <div className="absolute inset-0 flex flex-col items-center justify-center scanlines p-2.5 sm:p-6 overflow-hidden">
+                <div className="absolute w-[min(300px,76vw)] h-[min(300px,76vw)] sm:w-[420px] sm:h-[420px] rounded-full border border-[var(--c-line)] opacity-60 pointer-events-none" />
+                <div className="absolute w-[min(200px,52vw)] h-[min(200px,52vw)] sm:w-[300px] sm:h-[300px] rounded-full border border-[var(--c-line)] opacity-80 pointer-events-none" />
                 {phase === "searching" && (
-                  <div className="absolute w-[300px] h-[300px] rounded-full radar-sweep opacity-70" />
+                  <div className="absolute w-[min(200px,52vw)] h-[min(200px,52vw)] sm:w-[300px] sm:h-[300px] rounded-full radar-sweep opacity-70 pointer-events-none" />
                 )}
-                <div className="relative text-center px-6 max-w-xl">
-                  <div className="relative inline-grid place-items-center mb-6">
+                <div className="relative text-center px-2 sm:px-6 max-w-xl my-auto w-full z-10">
+                  <div className="relative inline-grid place-items-center mb-1.5 sm:mb-4">
                     {busy && (
                       <>
-                        <span className="absolute w-24 h-24 rounded-full border-2 border-[var(--c-mint)] opacity-70" style={{ animation: "vring 1.8s ease-out infinite" }} />
-                        <span className="absolute w-24 h-24 rounded-full border-2 border-[var(--c-mint)] opacity-50" style={{ animation: "vring 1.8s ease-out 0.6s infinite" }} />
+                        <span className="absolute w-14 h-14 sm:w-24 sm:h-24 rounded-full border-2 border-[var(--c-mint)] opacity-70" style={{ animation: "vring 1.8s ease-out infinite" }} />
+                        <span className="absolute w-14 h-14 sm:w-24 sm:h-24 rounded-full border-2 border-[var(--c-mint)] opacity-50" style={{ animation: "vring 1.8s ease-out 0.6s infinite" }} />
                       </>
                     )}
-                    <span className="floaty grid place-items-center w-20 h-20 rounded-2xl border border-[var(--c-line2)] bg-[var(--c-panel)] shadow-[var(--c-shadow)]">
-                      <LogoMark className="w-12 h-12" />
+                    <span className="floaty grid place-items-center w-11 h-11 sm:w-20 sm:h-20 rounded-xl sm:rounded-2xl border border-[var(--c-line2)] bg-[var(--c-panel)] shadow-[var(--c-shadow)]">
+                      <LogoMark className="w-6 h-6 sm:w-12 sm:h-12" />
                     </span>
                   </div>
 
                   {phase === "idle" || phase === "captcha" ? (
                     <>
-                      <h2 className="font-display font-900 text-2xl sm:text-4xl tracking-tight">{titleWord}</h2>
-                      <p className="mt-3 text-sm sm:text-[15px] text-[var(--c-dim)] leading-relaxed">{t("idle.sub")}</p>
-                      <div className="mt-5 flex flex-wrap justify-center gap-2">
-                        {([["idle.b1", <IconCheck key="a" className="w-3.5 h-3.5" />],
-                           ["idle.b2", <IconCheck key="b" className="w-3.5 h-3.5" />],
-                           ["idle.b3", <IconFlag key="c" className="w-3.5 h-3.5" />]] as const).map(([k, ic]) => (
-                          <span key={k} className="chip !cursor-default !text-[12px]">
+                      <h2 className="font-display font-900 text-lg sm:text-2xl md:text-3xl tracking-tight leading-tight">{titleWord}</h2>
+                      <p className="mt-1 sm:mt-2 text-[11.5px] sm:text-[14px] text-[var(--c-dim)] leading-relaxed max-w-md mx-auto">{t("idle.sub")}</p>
+                      <div className="mt-2 sm:mt-3.5 flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
+                        {([["idle.b1", <IconCheck key="a" className="w-3 h-3 sm:w-3.5 sm:h-3.5" />],
+                           ["idle.b2", <IconCheck key="b" className="w-3 h-3 sm:w-3.5 sm:h-3.5" />],
+                           ["idle.b3", <IconFlag key="c" className="w-3 h-3 sm:w-3.5 sm:h-3.5" />]] as const).map(([k, ic]) => (
+                          <span key={k} className="chip !cursor-default !text-[10px] sm:!text-[12px] px-2 py-0.5 sm:px-2.5 sm:py-1 whitespace-nowrap">
                             {ic}
                             {t(k)}
                           </span>
                         ))}
                       </div>
-                      <p className="mt-6 font-mono text-[11px] text-[var(--c-faint)] caret">ready · dtls-srtp · p2p</p>
+                      <p className="mt-2 sm:mt-4 font-mono text-[9px] sm:text-[11px] text-[var(--c-faint)] caret">ready · dtls-srtp · p2p</p>
                     </>
                   ) : (
                     <>
-                      <h2 className="font-display font-900 text-2xl sm:text-3xl text-[var(--c-mint)]">
+                      <h2 className="font-display font-900 text-lg sm:text-2xl text-[var(--c-mint)]">
                         {t("state.searching")}
                       </h2>
-                      <p className="mt-2 font-mono text-[12px] text-[var(--c-dim)]">{t("search.captionOnline")}</p>
-                      <p className="mt-1 font-mono text-[13px] text-[var(--c-amber)] caret">
+                      <p className="mt-1 font-mono text-[10px] sm:text-[12px] text-[var(--c-dim)]">{t("search.captionOnline")}</p>
+                      <p className="mt-0.5 font-mono text-[11px] sm:text-[13px] text-[var(--c-amber)] caret">
                         {t("stat.elapsed")} · {fmtElapsed(elapsed)}
                       </p>
                       {slot >= 0 && (
-                        <p className="mt-1 font-mono text-[11px] text-[var(--c-faint)]">
+                        <p className="mt-0.5 font-mono text-[9.5px] sm:text-[11px] text-[var(--c-faint)]">
                           viche-q-{String(slot).padStart(3, "0")}
                         </p>
                       )}
-                      <button className="btn mt-6" onClick={stop}>
+                      <button className="btn mt-2.5 sm:mt-4 !py-2 !px-5" onClick={stop}>
                         {t("ctl.stop")}
                       </button>
                     </>
@@ -265,43 +268,43 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
           </div>
 
           {/* нижня стрічка стану сцени */}
-          <div className="flex items-center gap-3 px-4 py-2.5 border-t border-[var(--c-line)] bg-[var(--c-panel)]">
+          <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2 sm:py-2.5 border-t border-[var(--c-line)] bg-[var(--c-panel)] text-xs sm:text-sm">
             <span className={`led ${ledCls}`} />
-            <span className="font-display text-[13px] font-700 tracking-wide">{stateWord}</span>
-            <span className="hidden sm:block font-mono text-[11px] text-[var(--c-faint)]">
+            <span className="font-display text-[12px] sm:text-[13px] font-700 tracking-wide">{stateWord}</span>
+            <span className="hidden sm:block font-mono text-[11px] text-[var(--c-faint)] truncate max-w-[200px]">
               {peer && phase === "live" ? `${peer.name} · #${peer.id}` : sessionId}
             </span>
             {iceView && (
               <span
-                className={`font-mono text-[10.5px] px-2 py-0.5 rounded-md border border-[var(--c-line)] bg-[var(--c-bg2)] ${iceView.cls}`}
+                className={`font-mono text-[9.5px] sm:text-[10.5px] px-1.5 sm:px-2 py-0.5 rounded-md border border-[var(--c-line)] bg-[var(--c-bg2)] ${iceView.cls}`}
                 title="WebRTC ICE path"
               >
                 {iceView.txt}
               </span>
             )}
-            <span className="ml-auto tick-id text-[11px]">{phase === "live" && peer ? `PAIR-${peer.id}` : sessionId}</span>
+            <span className="ml-auto tick-id text-[10px] sm:text-[11px]">{phase === "live" && peer ? `PAIR-${peer.id}` : sessionId}</span>
           </div>
         </div>
 
         {/* ── Пульт керування ── */}
-        <div className="mt-4 card p-4 sm:p-5">
-          <div className="flex flex-wrap items-center gap-3">
-            <button className="btn btn-amber !px-7 !py-3.5 !text-[15px]" onClick={start} disabled={busy}>
-              <IconShuffle className="w-5 h-5" />
+        <div className="mt-3 sm:mt-4 card p-3 sm:p-5">
+          <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 sm:gap-3">
+            <button className="btn btn-amber !px-5 sm:!px-7 !py-2.5 sm:!py-3.5 !text-[13.5px] sm:!text-[15px] justify-center flex-1 sm:flex-none" onClick={start} disabled={busy}>
+              <IconShuffle className="w-4 h-4 sm:w-5 sm:h-5" />
               {phase === "idle" || phase === "captcha" ? t("ctl.start") : t("ctl.resume")}
             </button>
             {phase !== "idle" && phase !== "captcha" && (
-              <button className="btn btn-red" onClick={stop}>
+              <button className="btn btn-red !px-4 sm:!px-6 !py-2.5 sm:!py-3.5 !text-[13.5px] sm:!text-[15px] justify-center flex-1 sm:flex-none" onClick={stop}>
                 {t("ctl.stop")}
               </button>
             )}
             <button
-              className={`chip ml-auto ${advanced ? "chip-on" : ""}`}
+              className={`chip sm:ml-auto justify-center !py-2 sm:!py-2.5 !text-[12px] sm:!text-[13px] ${advanced ? "chip-on" : ""}`}
               onClick={() => setAdvanced((v) => !v)}
               disabled={busy || phase === "live"}
               style={busy || phase === "live" ? { opacity: 0.45, pointerEvents: "none" } : undefined}
             >
-              <IconBolt className="w-4 h-4" />
+              <IconBolt className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               {t("ctl.advanced")}
               <span className="hidden md:inline font-mono text-[10px] opacity-70">· {t("ctl.advancedHint")}</span>
             </button>

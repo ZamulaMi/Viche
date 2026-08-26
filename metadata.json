@@ -1,0 +1,11 @@
+{
+  "name": "Viche",
+  "description": "Viche — анонімна відео-рулетка та кімнати для приватного спілкування через P2P WebRTC.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

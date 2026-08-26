@@ -452,28 +452,28 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   if (screen === "room" && room) {
     return (
       <div className="fadeup">
-        <div className="flex flex-wrap items-center gap-3 mb-5">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-4 sm:mb-5">
           <div className="min-w-0">
-            <p className="panel-title">{t("room.live")}</p>
-            <h1 className="font-display font-900 text-xl sm:text-2xl tracking-tight flex items-center gap-2.5">
+            <p className="panel-title text-[10px] sm:text-[11px]">{t("room.live")}</p>
+            <h1 className="font-display font-900 text-lg sm:text-2xl tracking-tight flex items-center gap-2">
               №{room.number}
               <span className="text-[var(--c-amber)]">·</span>
               <span className="text-[var(--c-amber)]">{room.code}</span>
             </h1>
           </div>
           <span
-            className={`chip !cursor-default !text-[11px] font-mono ${
+            className={`chip !cursor-default !text-[10.5px] sm:!text-[11px] font-mono !py-1 ${
               status === "host" || status === "guest" ? "chip-on" : ""
             }`}
           >
             {status === "host" ? t("room.sHost") : status === "guest" ? t("room.sGuest") : t("room.sConnecting")}
           </span>
-          <span className="chip !cursor-default !text-[11px] font-mono">
+          <span className="chip !cursor-default !text-[10.5px] sm:!text-[11px] font-mono !py-1">
             {filled}/{seats} · {t("room.members").toLowerCase()}
           </span>
           {iceInfo && (
             <span
-              className={`chip !cursor-default !text-[11px] font-mono ${
+              className={`chip !cursor-default !text-[10.5px] sm:!text-[11px] font-mono !py-1 ${
                 iceInfo.includes("relay") ? "chip-on" : ""
               }`}
               title="WebRTC ICE paths (mesh)"
@@ -482,7 +482,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
               {iceInfo}
             </span>
           )}
-          <button className="btn btn-red ml-auto" onClick={leaveRoom}>
+          <button className="btn btn-red !py-2 !px-3.5 sm:!px-4 ml-auto !text-xs sm:!text-sm" onClick={leaveRoom}>
             <IconEnd className="w-4 h-4" />
             {t("room.leave")}
           </button>

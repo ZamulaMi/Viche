@@ -155,8 +155,28 @@ export async function getLocalStream(): Promise<LocalMedia> {
       close: () => s.getTracks().forEach((tr) => tr.stop()),
     };
   } catch {
-    const c = makeCanvasStream("TI", 42);
-    return { ...c, hasCam: false };
+    try {
+      // Спроба отримати хоча б мікрофон, якщо відеокамера зайнята чи відхилена
+      const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const c = makeCanvasStream("TI", 42);
+      const combined = new MediaStream([
+        ...c.stream.getVideoTracks(),
+        ...audioStream.getAudioTracks(),
+      ]);
+      return {
+        stream: combined,
+        hasCam: false,
+        isReal: true,
+        setSpeaking: c.setSpeaking,
+        close: () => {
+          c.close();
+          audioStream.getTracks().forEach((tr) => tr.stop());
+        },
+      };
+    } catch {
+      const c = makeCanvasStream("TI", 42);
+      return { ...c, hasCam: false };
+    }
   }
 }
 
