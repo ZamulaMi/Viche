@@ -240,7 +240,6 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
                       <p className="mt-1 sm:mt-2 text-[11.5px] sm:text-[14px] text-[var(--c-dim)] leading-relaxed max-w-md mx-auto">{t("idle.sub")}</p>
                       <div className="mt-2 sm:mt-3.5 flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
                         {([["idle.b1", <IconCheck key="a" className="w-3 h-3 sm:w-3.5 sm:h-3.5" />],
-                           ["idle.b2", <IconCheck key="b" className="w-3 h-3 sm:w-3.5 sm:h-3.5" />],
                            ["idle.b3", <IconFlag key="c" className="w-3 h-3 sm:w-3.5 sm:h-3.5" />]] as const).map(([k, ic]) => (
                           <span key={k} className="chip !cursor-default !text-[10px] sm:!text-[12px] px-2 py-0.5 sm:px-2.5 sm:py-1 whitespace-nowrap">
                             {ic}

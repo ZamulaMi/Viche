@@ -230,13 +230,16 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   const [draft, setDraft] = useState("");
   const [recents, setRecents] = useState<StoredRoom[]>(loadRecent);
   const [isFull, setIsFull] = useState(false);
-  const [isPortrait, setIsPortrait] = useState(() =>
-    typeof window !== "undefined" ? window.innerHeight > window.innerWidth : false
-  );
+  const [isPortrait, setIsPortrait] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const matchMediaPortrait = window.matchMedia?.("(orientation: portrait)")?.matches;
+    return matchMediaPortrait ?? (window.innerHeight >= window.innerWidth);
+  });
 
   useEffect(() => {
     const updateOrient = () => {
-      setIsPortrait(window.innerHeight > window.innerWidth);
+      const matchMediaPortrait = window.matchMedia?.("(orientation: portrait)")?.matches;
+      setIsPortrait(matchMediaPortrait ?? (window.innerHeight >= window.innerWidth));
     };
     updateOrient();
     window.addEventListener("resize", updateOrient);
