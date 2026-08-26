@@ -227,7 +227,6 @@ function Shell() {
               >
                 <span className={view === n.v ? "text-[var(--c-amber)]" : ""}>{n.icon}</span>
                 <span className="font-700 text-[14px] flex-1">{t(n.key as never)}</span>
-                <span className="kbd">{n.k}</span>
               </button>
             ))}
             <div className="mt-auto pt-6">
