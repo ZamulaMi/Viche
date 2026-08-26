@@ -31,6 +31,8 @@ type RMsg =
   | { type: "chat"; from: string; name: string; text: string }
   | { type: "kick" }
   | { type: "poke" } // «ти мав мені подзвонити» — прискорює mesh
+  | { type: "aux-list"; list: Array<{ id: string; name: string }> }
+  | { type: "aux-add"; id: string; name: string }
   | { type: "aux-gone"; id: string } // випадковий гість видалений
   | { type: "full" };
 
@@ -143,15 +145,31 @@ export class RoomNet {
     this.roster = [...this.roster, { id, name: String(m.name || "Гість").slice(0, 24) }];
     this.broadcastRoster();
     this.meshSync();
-    // учасник, який зайшов пізніше, теж має бачити «випадкових гостей»
+    // учасник, який зайшов пізніше, теж має отримати відео «випадкових гостей»
+    const auxList: Array<{ id: string; name: string }> = [];
     this.auxStreams.forEach((v, auxId) => {
+      auxList.push({ id: auxId, name: v.name });
       const p = this.peer;
       if (!p) return;
       const call = p.call(id, v.stream, { metadata: { aux: true, auxId, name: v.name } });
       if (!call) return;
       const list = this.auxCalls.get(auxId) ?? [];
       this.auxCalls.set(auxId, [...list, call]);
+      call.on("close", () => {
+        const arr = this.auxCalls.get(auxId) ?? [];
+        this.auxCalls.set(auxId, arr.filter((c) => c !== call));
+      });
+      call.on("error", () => {
+        /* noop */
+      });
     });
+    if (auxList.length > 0) {
+      try {
+        conn.send({ type: "aux-list", list: auxList } satisfies RMsg);
+      } catch {
+        /* noop */
+      }
+    }
   }
 
   /* ── гість: підключення до хоста ── */
@@ -205,6 +223,8 @@ export class RoomNet {
         this.hooks.onRoster(m.members);
         if (!this.isHost) this.hooks.onStatus("guest");
         this.meshSync();
+      } else if (m.type === "aux-gone") {
+        this.hooks.onAuxGone?.(m.id);
       } else if (m.type === "chat") {
         this.hooks.onChat(m.from, m.name, m.text);
       } else if (m.type === "kick") {
@@ -285,9 +305,38 @@ export class RoomNet {
     call.answer(this.stream);
     const list = this.auxCalls.get(auxId) ?? [];
     this.auxCalls.set(auxId, [...list, call]);
+
+    let emitted = false;
+    const handleStream = (s: MediaStream) => {
+      if (emitted) return;
+      emitted = true;
+      this.hooks.onAuxStream?.(auxId, auxName, s);
+    };
+
     call.on("stream", (s) => {
-      if (s.getTracks().length > 0) this.hooks.onAuxStream?.(auxId, auxName, s);
+      handleStream(s);
     });
+
+    const pc = call.peerConnection;
+    if (pc) {
+      pc.ontrack = (e) => {
+        if (e.streams && e.streams[0]) {
+          handleStream(e.streams[0]);
+        } else if (e.track) {
+          handleStream(new MediaStream([e.track]));
+        }
+      };
+      try {
+        pc.addEventListener("connectionstatechange", () => {
+          if (pc.connectionState === "failed") {
+            restartIceOn(call);
+          }
+        });
+      } catch {
+        /* noop */
+      }
+    }
+
     call.on("close", () => {
       const arr = this.auxCalls.get(auxId) ?? [];
       this.auxCalls.set(auxId, arr.filter((c) => c !== call));
@@ -302,7 +351,20 @@ export class RoomNet {
   shareAuxStream(auxId: string, name: string, stream: MediaStream) {
     if (!this.isHost || !this.peer) return;
     this.auxStreams.set(auxId, { name, stream });
+    this.broadcastData({ type: "aux-add", id: auxId, name } satisfies RMsg);
     this.sendAuxToAll(auxId, name, stream);
+  }
+
+  private broadcastData(msg: RMsg) {
+    this.conns.forEach((c) => {
+      if (c.open) {
+        try {
+          c.send(msg);
+        } catch {
+          /* noop */
+        }
+      }
+    });
   }
 
   private sendAuxToAll(auxId: string, name: string, stream: MediaStream) {
@@ -329,6 +391,7 @@ export class RoomNet {
   /* хост: припинити ретрансляцію (гість вийшов / його кикнули) */
   stopShareAuxStream(auxId: string) {
     this.auxStreams.delete(auxId);
+    this.broadcastData({ type: "aux-gone", id: auxId } satisfies RMsg);
     const list = this.auxCalls.get(auxId) ?? [];
     list.forEach((c) => {
       try {

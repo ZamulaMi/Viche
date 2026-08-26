@@ -446,7 +446,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
 
   const isHost = !!room && status === "host";
   const link = room ? roomLink(room) : "";
-  const filled = roster.length + hunters.length;
+  const filled = roster.length + hunters.length + (isHost ? 0 : Object.keys(auxStreams).length);
 
   /* ── Екран кімнати ── */
   if (screen === "room" && room) {
@@ -491,7 +491,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
         <div className="grid lg:grid-cols-[minmax(0,1fr)_330px] gap-4 items-start">
           {/* ── Сітка учасників ── */}
           <div className="min-w-0">
-            <div className="grid sm:grid-cols-2 gap-3">
+            <div className={`grid gap-3 ${filled === 1 ? "grid-cols-1 max-w-xl" : "sm:grid-cols-2"}`}>
               {/* реальні учасники (mesh P2P) */}
               {roster.map((m) => {
                 const self = netRef.current?.myId === m.id;
@@ -547,12 +547,6 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
                   badgeTone="mint"
                   live
                 />
-              ))}
-              {/* вільні місця */}
-              {Array.from({ length: Math.max(0, seats - filled) }).map((_, i) => (
-                <div key={"e" + i} className="aspect-[4/3] rounded-xl border border-dashed border-[var(--c-line)] grid place-items-center bg-[color-mix(in_srgb,var(--c-bg2)_60%,transparent)]">
-                  <p className="font-mono text-[11px] text-[var(--c-faint)]">{t("room.emptySeat")}</p>
-                </div>
               ))}
             </div>
 
