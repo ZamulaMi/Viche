@@ -43,9 +43,9 @@ type Wire =
   | { t: "bye" };
 
 const BEACON_PREFIX = "viche-v3-s-";
-const N_SLOTS = 32;
-const PROBE_INTERVAL = 600; // швидке паралельне зондування маяків
-const KNOCK_TIMEOUT = 1800; // швидкий таймаут опитування
+const N_SLOTS = 16;
+const PROBE_INTERVAL = 800; // регулярне зондування слотів
+const KNOCK_TIMEOUT = 3500; // достатній таймаут для глобальних / мобільних мереж
 
 function browserUid(): string {
   try {
@@ -298,7 +298,7 @@ export class RouletteNet {
           /* noop */
         }
         tryNextBeacon();
-      }, 1500);
+      }, 4000);
 
       bp.on("open", () => {
         if (settled) {

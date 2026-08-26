@@ -6,13 +6,10 @@
    ───────────────────────────────────────────────────────────── */
 import type { MediaConnection, PeerOptions } from "peerjs";
 
-/* NAT traversal + глобальні з'єднання (мобільний інтернет 4G/5G, CGNAT, Wi-Fi).
-   За замовчуванням — повний ICE-каскад (host → srflx/STUN → relay/TURN):
-   браузер сам обирає найкращий робочий шлях, тому з'єднання встановлюється
-   і локально, і глобально між будь-якими операторами зв'язку.
-   
-   Google STUN, Cloudflare STUN, Twilio STUN та надійні TURN-реле (у тому числі
-   через TCP/TLS порт 443) забезпечують пробиття мобільних симетричних NAT (CGNAT). */
+/* NAT traversal + глобальні з'єднання (Wi-Fi, 4G/5G, домашні та корпоративні мережі).
+   Google STUN + Cloudflare STUN забезпечують швидке та безвідмовне визначення
+   публічних адрес (srflx). При наявності власного coturn/TURN (VITE_TURN_URL або
+   налаштувань у сховищі) вони додаються на початок списку. */
 const env = import.meta.env;
 
 // Читання користувацького TURN з localStorage (якщо налаштовано) або з .env
@@ -49,7 +46,7 @@ const relayOnly = env.VITE_RELAY_ONLY === "true" || env.VITE_RELAY_ONLY === "1";
 export const iceConfig: RTCConfiguration = {
   iceServers: [
     ...customTurn,
-    // 1. Провідні глобальні STUN-сервери (визначення публічної IP:порт)
+    // Найнадійніші відкриті глобальні STUN-сервери з миттєвим часом відповіді
     {
       urls: [
         "stun:stun.l.google.com:19302",
@@ -58,61 +55,17 @@ export const iceConfig: RTCConfiguration = {
         "stun:stun3.l.google.com:19302",
         "stun:stun4.l.google.com:19302",
         "stun:stun.cloudflare.com:3478",
-        "stun:global.stun.twilio.com:3478",
-        "stun:stun.services.mozilla.com:3478",
-        "stun:stun.sipgate.net:3478",
-        "stun:stun.syncthing.net:3478",
       ],
-    },
-    // 2. Безкоштовні глобальні TURN-сервери (OpenRelay / Metered)
-    // Працюють через порти 80, 443 (HTTPS), 5349 (TLS), TCP і UDP.
-    // Проходять крізь мобільні мережі (Kyivstar, Vodafone, Lifecell тощо) та CGNAT.
-    {
-      urls: [
-        "turn:openrelay.metered.ca:80",
-        "turn:openrelay.metered.ca:80?transport=tcp",
-        "turn:openrelay.metered.ca:443",
-        "turn:openrelay.metered.ca:443?transport=tcp",
-        "turns:openrelay.metered.ca:443?transport=tcp",
-        "turns:openrelay.metered.ca:5349?transport=tcp",
-      ],
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-    {
-      urls: [
-        "turn:standard.relay.metered.ca:80",
-        "turn:standard.relay.metered.ca:80?transport=tcp",
-        "turn:standard.relay.metered.ca:443",
-        "turn:standard.relay.metered.ca:443?transport=tcp",
-        "turns:standard.relay.metered.ca:443?transport=tcp",
-      ],
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-    {
-      urls: [
-        "turn:relay.metered.ca:80",
-        "turn:relay.metered.ca:80?transport=tcp",
-        "turn:relay.metered.ca:443",
-        "turn:relay.metered.ca:443?transport=tcp",
-        "turns:relay.metered.ca:443?transport=tcp",
-      ],
-      username: "openrelayproject",
-      credential: "openrelayproject",
     },
   ],
-  // Повний ICE-каскад (host → srflx → relay)
   ...(relayOnly ? { iceTransportPolicy: "relay" as RTCIceTransportPolicy } : {}),
-  // Попередній збір кандидатів: прискорює встановлення з'єднання на мобільному інтернеті
-  iceCandidatePoolSize: 6,
+  iceCandidatePoolSize: 2,
 };
 
-/* Спільні налаштування PeerJS з heartbeat для мобільних мереж */
+/* Спільні налаштування PeerJS */
 export const defaultPeerOptions: PeerOptions = {
   debug: 0,
   config: iceConfig,
-  pingInterval: 5000, // регулярний пінг запобігає закриттю NAT-таблиць у мобільних операторів
 };
 
 /* Яким шляхом з'єдналась пара: relay (TURN) / stun / lan (direct) */

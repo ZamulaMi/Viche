@@ -74,12 +74,17 @@ export class RoomNet {
     private name: string,
     private stream: MediaStream,
     private seats: number,
-    private hooks: RoomHooks
+    private hooks: RoomHooks,
+    asCreator: boolean = true
   ) {
     this.room = room;
     this.hostId = PREFIX + roomIdStr(room);
     this.detachNet = attachNetRecovery(() => [...this.calls.values()]);
-    this.tryHost();
+    if (asCreator) {
+      this.tryHost();
+    } else {
+      this.joinAsGuest();
+    }
   }
 
   get isHost() {

@@ -252,60 +252,67 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
         setAuxStreams({});
         saveRecent(r);
         setRecents(loadRecent());
-        const net = new RoomNet(r, name.trim() || "Гість_" + shortId(4), lm.stream, seats, {
-          onStatus: (s) => {
-            if (!aliveRef.current) return;
-            setStatus(s);
-            if (s === "host") {
-              push("sys", tRef.current("room.sHost"));
-            } else if (s === "guest") {
-              push("sys", tRef.current("room.sGuest"));
-            } else if (s === "exists" && creatorRef.current) {
-              onToast(tRef.current("room.errExists"), "warn");
-              netRef.current?.leave();
-              void openRoom(makeRoomId(), true);
-            } else if (s === "not-found") {
-              onToast(tRef.current("room.errNotFound"), "warn");
+        const net = new RoomNet(
+          r,
+          name.trim() || "Гість_" + shortId(4),
+          lm.stream,
+          seats,
+          {
+            onStatus: (s) => {
+              if (!aliveRef.current) return;
+              setStatus(s);
+              if (s === "host") {
+                push("sys", tRef.current("room.sHost"));
+              } else if (s === "guest") {
+                push("sys", tRef.current("room.sGuest"));
+              } else if (s === "exists" && creatorRef.current) {
+                onToast(tRef.current("room.errExists"), "warn");
+                netRef.current?.leave();
+                void openRoom(makeRoomId(), true);
+              } else if (s === "not-found") {
+                onToast(tRef.current("room.errNotFound"), "warn");
+                leaveRoom();
+              } else if (s === "full") {
+                onToast(tRef.current("room.errFull"), "warn");
+                leaveRoom();
+              } else if (s === "closed" && prevRoster.current.length > 0) {
+                onToast(tRef.current("room.errClosed"), "warn");
+                leaveRoom();
+              }
+            },
+            onRoster: (members) => aliveRef.current && setRoster(members),
+            onPeerStream: (pid, s) => aliveRef.current && setStreams((st) => ({ ...st, [pid]: s })),
+            onPeerGone: (pid) =>
+              aliveRef.current &&
+              setStreams((st) => {
+                const cp = { ...st };
+                delete cp[pid];
+                return cp;
+              }),
+            onChat: (_from, fromName, text) => {
+              if (!aliveRef.current) return;
+              const { text: clean, flagged } = filterProfanity(text);
+              push("msg", clean, { name: fromName });
+              if (flagged) push("sys", tRef.current("chat.warn"));
+            },
+            onKicked: () => {
+              if (!aliveRef.current) return;
+              onToast(tRef.current("room.kicked"), "warn");
               leaveRoom();
-            } else if (s === "full") {
-              onToast(tRef.current("room.errFull"), "warn");
-              leaveRoom();
-            } else if (s === "closed" && prevRoster.current.length > 0) {
-              onToast(tRef.current("room.errClosed"), "warn");
-              leaveRoom();
-            }
+            },
+            onIceInfo: (info) => aliveRef.current && setIceInfo(info),
+            onAuxStream: (auxId, auxName, stream) =>
+              aliveRef.current && setAuxStreams((a) => ({ ...a, [auxId]: { name: auxName, stream } })),
+            onAuxGone: (auxId) =>
+              aliveRef.current &&
+              setAuxStreams((a) => {
+                const cp = { ...a };
+                delete cp[auxId];
+                return cp;
+              }),
           },
-          onRoster: (members) => aliveRef.current && setRoster(members),
-          onPeerStream: (pid, s) => aliveRef.current && setStreams((st) => ({ ...st, [pid]: s })),
-          onPeerGone: (pid) =>
-            aliveRef.current &&
-            setStreams((st) => {
-              const cp = { ...st };
-              delete cp[pid];
-              return cp;
-            }),
-          onChat: (_from, fromName, text) => {
-            if (!aliveRef.current) return;
-            const { text: clean, flagged } = filterProfanity(text);
-            push("msg", clean, { name: fromName });
-            if (flagged) push("sys", tRef.current("chat.warn"));
-          },
-          onKicked: () => {
-            if (!aliveRef.current) return;
-            onToast(tRef.current("room.kicked"), "warn");
-            leaveRoom();
-          },
-          onIceInfo: (info) => aliveRef.current && setIceInfo(info),
-          onAuxStream: (auxId, auxName, stream) =>
-            aliveRef.current && setAuxStreams((a) => ({ ...a, [auxId]: { name: auxName, stream } })),
-          onAuxGone: (auxId) =>
-            aliveRef.current &&
-            setAuxStreams((a) => {
-              const cp = { ...a };
-              delete cp[auxId];
-              return cp;
-            }),
-        });
+          asCreator
+        );
         netRef.current = net;
       } finally {
         setBusy(false);
