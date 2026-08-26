@@ -289,7 +289,6 @@ export class RoomNet {
         } catch {
           /* noop */
         }
-        this.attemptGuestReconnect();
       }
     });
 

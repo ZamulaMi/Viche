@@ -266,13 +266,11 @@ export class RouletteNet {
       }
       if (this.isFatal(err.type)) {
         if (this.paired) {
-          // При зміні мережі не розриваємо пару негайно — намагаємось перепідключити сокет
           try {
             p.reconnect();
           } catch {
             /* noop */
           }
-          this.triggerActiveCallRecovery();
           return;
         }
         this.destroyMyPeer();
@@ -290,9 +288,6 @@ export class RouletteNet {
           p.reconnect();
         } catch {
           /* noop */
-        }
-        if (this.paired) {
-          this.triggerActiveCallRecovery();
         }
       }
     });
@@ -724,7 +719,7 @@ export class RouletteNet {
           if (st === "connected") {
             this.cancelRecovery();
             void icePathInfo(pc).then((tp) => this.hooks.onIce?.(tp));
-          } else if (st === "failed" || st === "disconnected") {
+          } else if (st === "failed") {
             this.triggerActiveCallRecovery();
           } else {
             this.hooks.onIce?.(st);
@@ -737,7 +732,7 @@ export class RouletteNet {
           if (iceSt === "connected" || iceSt === "completed") {
             this.cancelRecovery();
             void icePathInfo(pc).then((tp) => this.hooks.onIce?.(tp));
-          } else if (iceSt === "failed" || iceSt === "disconnected") {
+          } else if (iceSt === "failed") {
             this.triggerActiveCallRecovery();
           }
         });
@@ -761,22 +756,12 @@ export class RouletteNet {
     });
   }
 
-  /* ── Автоматичне відновлення зв'язку при перемиканні мережі ── */
+  /* ── Автоматичне відновлення зв'язку при перемиканні мережі або збої ICE ── */
   private triggerActiveCallRecovery() {
-    if (!this.paired || this.disposed || this.explicitBye) return;
+    if (!this.paired || this.disposed || this.explicitBye || this.recovering) return;
 
-    this.hooks.onIce?.("disconnected");
-
-    // Запускаємо таймер очікування відновлення зв'язку (8.5 секунд замість миттєвого дропу)
-    if (!this.recovering) {
-      this.recovering = true;
-      window.clearTimeout(this.recoveryTimer);
-      this.recoveryTimer = window.setTimeout(() => {
-        if (this.paired && this.recovering && !this.disposed) {
-          this.partnerLeft();
-        }
-      }, 8500);
-    }
+    this.recovering = true;
+    this.hooks.onIce?.("reconnecting");
 
     // 1. Якщо локальний Peer втратив WS-з'єднання з сигналінгом, підключаємо знову
     if (this.myPeer && this.myPeer.disconnected && !this.myPeer.destroyed) {
@@ -792,31 +777,13 @@ export class RouletteNet {
       restartIceOn(this.call);
     }
 
-    // 3. Якщо ми ініціатор або якщо минуло >3.5 с — робимо повторний виклик по новому IP
-    if (this.partnerId && this.myPeer && !this.myPeer.destroyed) {
-      const isInitiator = this.cmp(this.myPeerId, this.partnerId) < 0;
-      window.setTimeout(() => {
-        if (this.paired && this.recovering && this.partnerId && !this.disposed) {
-          if (isInitiator || !this.call || this.call.peerConnection?.connectionState === "failed") {
-            try {
-              if (!this.chatConn || !this.chatConn.open) {
-                const c = this.myPeer?.connect(this.partnerId, { reliable: true });
-                if (c) {
-                  this.chatConn = c;
-                  this.wireChat(c);
-                }
-              }
-              const newCall = this.myPeer?.call(this.partnerId, this.stream);
-              if (newCall) {
-                this.wireCall(newCall);
-              }
-            } catch {
-              /* noop */
-            }
-          }
-        }
-      }, 600);
-    }
+    // 3. Якщо протягом 7.5 секунд зв'язок не відновився — завершуємо пару
+    window.clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = window.setTimeout(() => {
+      if (this.paired && this.recovering && !this.disposed) {
+        this.partnerLeft();
+      }
+    }, 7500);
   }
 
   private cancelRecovery() {

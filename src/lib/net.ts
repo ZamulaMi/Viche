@@ -46,7 +46,7 @@ const relayOnly = env.VITE_RELAY_ONLY === "true" || env.VITE_RELAY_ONLY === "1";
 export const iceConfig: RTCConfiguration = {
   iceServers: [
     ...customTurn,
-    // Надійні відкриті глобальні STUN-сервери з підтримкою IPv4/IPv6 та стільникових мереж
+    // Надійні високошвидкісні глобальні STUN-сервери Google та Cloudflare
     {
       urls: [
         "stun:stun.l.google.com:19302",
@@ -55,13 +55,11 @@ export const iceConfig: RTCConfiguration = {
         "stun:stun3.l.google.com:19302",
         "stun:stun4.l.google.com:19302",
         "stun:stun.cloudflare.com:3478",
-        "stun:stun.services.mozilla.com:3478",
-        "stun:stun.voip.blackberry.com:3478",
       ],
     },
   ],
   ...(relayOnly ? { iceTransportPolicy: "relay" as RTCIceTransportPolicy } : {}),
-  iceCandidatePoolSize: 4,
+  iceCandidatePoolSize: 0,
 };
 
 /* Спільні налаштування PeerJS */
@@ -125,16 +123,10 @@ export function attachNetRecovery(
     debounceTimer = window.setTimeout(() => {
       getCalls().forEach(restartIceOn);
       onNetworkChange?.();
-    }, 350);
+    }, 600);
   };
 
   window.addEventListener("online", trigger);
-  window.addEventListener("pageshow", trigger);
-
-  const onVis = () => {
-    if (document.visibilityState === "visible") trigger();
-  };
-  document.addEventListener("visibilitychange", onVis);
 
   const nav = navigator as Navigator & {
     connection?: {
@@ -147,8 +139,6 @@ export function attachNetRecovery(
   return () => {
     window.clearTimeout(debounceTimer);
     window.removeEventListener("online", trigger);
-    window.removeEventListener("pageshow", trigger);
-    document.removeEventListener("visibilitychange", onVis);
     nav.connection?.removeEventListener?.("change", trigger);
   };
 }
