@@ -76,6 +76,8 @@ export default function VideoChat({
   const [remoteVideoTrackMuted, setRemoteVideoTrackMuted] = useState(false);
   const [cool, setCool] = useState(false);
   const [isFull, setIsFull] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const hideTimerRef = useRef<number | null>(null);
   const [facingMode, setFacingMode] = useState<FacingMode>(localMedia?.facingMode ?? "user");
   const [switchingCam, setSwitchingCam] = useState(false);
 
@@ -491,13 +493,82 @@ export default function VideoChat({
     }
   };
 
+  const resetHideTimer = useCallback(() => {
+    setControlsVisible(true);
+    if (hideTimerRef.current) {
+      window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+    if (isFull && !chatOpen) {
+      hideTimerRef.current = window.setTimeout(() => {
+        setControlsVisible(false);
+      }, 2000);
+    }
+  }, [isFull, chatOpen]);
+
+  useEffect(() => {
+    if (!isFull) {
+      if (hideTimerRef.current) {
+        window.clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+      }
+      setControlsVisible(true);
+      return;
+    }
+
+    resetHideTimer();
+
+    const handleUserActivity = () => {
+      resetHideTimer();
+    };
+
+    window.addEventListener("mousemove", handleUserActivity, { passive: true });
+    window.addEventListener("pointermove", handleUserActivity, { passive: true });
+    window.addEventListener("pointerdown", handleUserActivity, { passive: true });
+    window.addEventListener("touchstart", handleUserActivity, { passive: true });
+    window.addEventListener("keydown", handleUserActivity, { passive: true });
+
+    return () => {
+      if (hideTimerRef.current) {
+        window.clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+      }
+      window.removeEventListener("mousemove", handleUserActivity);
+      window.removeEventListener("pointermove", handleUserActivity);
+      window.removeEventListener("pointerdown", handleUserActivity);
+      window.removeEventListener("touchstart", handleUserActivity);
+      window.removeEventListener("keydown", handleUserActivity);
+    };
+  }, [isFull, resetHideTimer]);
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      const isDocFull = !!(
+        document.fullscreenElement ||
+        (document as unknown as { webkitFullscreenElement?: Element }).webkitFullscreenElement
+      );
+      if (!isDocFull && isFull) {
+        setIsFull(false);
+        setControlsVisible(true);
+      }
+    };
+    document.addEventListener("fullscreenchange", handleFsChange);
+    document.addEventListener("webkitfullscreenchange", handleFsChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFsChange);
+      document.removeEventListener("webkitfullscreenchange", handleFsChange);
+    };
+  }, [isFull]);
+
   const enterFs = async () => {
     setIsFull(true);
+    resetHideTimer();
     await enterFullscreen(boxRef.current);
   };
 
   const exitFs = async () => {
     setIsFull(false);
+    setControlsVisible(true);
     await exitFullscreen();
   };
 
@@ -512,9 +583,15 @@ export default function VideoChat({
   return (
     <div
       ref={boxRef}
+      onPointerMove={resetHideTimer}
+      onPointerDown={resetHideTimer}
+      onTouchStart={resetHideTimer}
+      onClick={resetHideTimer}
       className={`${
         isFull
-          ? "fixed inset-0 z-[9999] w-screen h-[100dvh] bg-black overflow-hidden select-none"
+          ? `fixed inset-0 z-[9999] w-screen h-[100dvh] bg-black overflow-hidden select-none ${
+              !controlsVisible ? "cursor-none" : "cursor-default"
+            }`
           : "absolute inset-0 bg-black overflow-visible"
       }`}
     >
@@ -549,7 +626,15 @@ export default function VideoChat({
         const effectivePeerMic = peerMicOn !== undefined ? peerMicOn : !remoteTrackMuted;
         const effectivePeerCam = peerCamOn !== undefined ? peerCamOn : !remoteVideoTrackMuted;
         return (
-          <div className={`absolute top-2 sm:top-3 left-2 sm:left-3 right-2 sm:right-3 ${isFull ? "pt-[env(safe-area-inset-top,10px)]" : "pt-[env(safe-area-inset-top,0px)]"} flex items-start justify-between gap-2 z-20 pointer-events-none`}>
+          <div
+            className={`absolute top-2 sm:top-3 left-2 sm:left-3 right-2 sm:right-3 ${
+              isFull ? "pt-[env(safe-area-inset-top,10px)]" : "pt-[env(safe-area-inset-top,0px)]"
+            } flex items-start justify-between gap-2 z-20 pointer-events-none transition-all duration-500 ease-in-out ${
+              isFull && !controlsVisible
+                ? "opacity-0 -translate-y-2 pointer-events-none"
+                : "opacity-100 translate-y-0"
+            }`}
+          >
             <div className="flex items-center gap-2 sm:gap-2.5 rounded-xl bg-[color-mix(in_srgb,var(--c-bg)_76%,transparent)] backdrop-blur-md border border-[var(--c-line)] px-2.5 sm:px-3.5 py-1.5 sm:py-2 pointer-events-auto shadow-sm">
               <span className="led led-mint" />
               <div className="leading-tight">
@@ -761,7 +846,17 @@ export default function VideoChat({
       </div>
 
       {/* адаптивна панель керування */}
-      <div className={`absolute ${isFull ? "bottom-2 sm:bottom-4 pb-[env(safe-area-inset-bottom,8px)]" : "bottom-2 sm:bottom-4 pb-[env(safe-area-inset-bottom,0px)]"} left-1/2 -translate-x-1/2 z-30 flex justify-center px-1 pointer-events-none w-full max-w-[calc(100vw-8px)] sm:max-w-max`}>
+      <div
+        className={`absolute ${
+          isFull
+            ? "bottom-2 sm:bottom-4 pb-[env(safe-area-inset-bottom,8px)]"
+            : "bottom-2 sm:bottom-4 pb-[env(safe-area-inset-bottom,0px)]"
+        } left-1/2 -translate-x-1/2 z-30 flex justify-center px-1 pointer-events-none w-full max-w-[calc(100vw-8px)] sm:max-w-max transition-all duration-500 ease-in-out ${
+          isFull && !controlsVisible
+            ? "opacity-0 translate-y-4 pointer-events-none"
+            : "opacity-100 translate-y-0"
+        }`}
+      >
         <div className="pointer-events-auto flex items-center justify-center gap-1 sm:gap-1.5 p-1 sm:p-1.5 bg-[color-mix(in_srgb,var(--c-bg)_82%,transparent)] backdrop-blur-md rounded-xl sm:rounded-2xl border border-[var(--c-line)] shadow-lg max-w-full overflow-x-auto no-scrollbar">
           <button
             className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none transition-all ${
