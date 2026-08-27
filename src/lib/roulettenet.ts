@@ -32,13 +32,15 @@ export type RouletteHooks = {
   onPair: (stream: MediaStream, peerId: string) => void;
   onPeerLeft: () => void;
   onIce?: (info: string) => void;
+  onOrientChange?: (orient: "land" | "port") => void;
 };
 
 type Wire =
-  | { t: "knock"; from: string; f: RouletteFilters; u: string }
-  | { t: "accept"; from: string; u: string }
+  | { t: "knock"; from: string; f: RouletteFilters; u: string; orient?: "land" | "port" }
+  | { t: "accept"; from: string; u: string; orient?: "land" | "port" }
   | { t: "busy" }
-  | { t: "chello"; from: string }
+  | { t: "chello"; from: string; orient?: "land" | "port" }
+  | { t: "orient"; orient: "land" | "port" }
   | { t: "chat"; text: string }
   | { t: "bye" };
 
@@ -83,6 +85,7 @@ export class RouletteNet {
   private mySlot = -1;
   private uid = browserUid();
   private myFilters: RouletteFilters = { gender: "any", lang: "any", tags: [] };
+  private myOrient: "land" | "port" = "land";
 
   private partnerId: string | null = null;
   private chatConn: DataConnection | null = null;
@@ -123,11 +126,27 @@ export class RouletteNet {
     },
   };
 
-  constructor(private stream: MediaStream, private hooks: RouletteHooks) {
+  constructor(
+    private stream: MediaStream,
+    private hooks: RouletteHooks,
+    initialOrient: "land" | "port" = "land"
+  ) {
+    this.myOrient = initialOrient;
     this.detachNet = attachNetRecovery(
       () => [this.call],
       () => this.handleNetworkChange()
     );
+  }
+
+  public sendOrientation(orient: "land" | "port") {
+    this.myOrient = orient;
+    if (this.chatConn && this.chatConn.open) {
+      try {
+        this.chatConn.send({ t: "orient", orient } satisfies Wire);
+      } catch {
+        /* noop */
+      }
+    }
   }
 
   private handleNetworkChange() {
@@ -434,12 +453,17 @@ export class RouletteNet {
       const partnerDirectId = msg.from;
       if (!partnerDirectId) return;
 
+      if (msg.orient) {
+        this.hooks.onOrientChange?.(msg.orient);
+      }
+
       // Приймаємо парування
       try {
         conn.send({
           t: "accept",
           from: this.myPeerId,
           u: this.uid,
+          orient: this.myOrient,
         } satisfies Wire);
       } catch {
         /* noop */
@@ -533,6 +557,7 @@ export class RouletteNet {
           from: this.myPeerId,
           u: this.uid,
           f: this.myFilters,
+          orient: this.myOrient,
         } satisfies Wire);
       } catch {
         cleanup();
@@ -546,6 +571,9 @@ export class RouletteNet {
         if (this.paired || !this.searching || msg.u === this.uid) {
           cleanup();
           return;
+        }
+        if (msg.orient) {
+          this.hooks.onOrientChange?.(msg.orient);
         }
         const partnerDirectId = msg.from;
         if (partnerDirectId) {
@@ -606,7 +634,8 @@ export class RouletteNet {
         this.chatConn = c;
         c.on("open", () => {
           try {
-            c.send({ t: "chello", from: this.myPeerId } satisfies Wire);
+            c.send({ t: "chello", from: this.myPeerId, orient: this.myOrient } satisfies Wire);
+            c.send({ t: "orient", orient: this.myOrient } satisfies Wire);
           } catch {
             /* noop */
           }
@@ -673,6 +702,17 @@ export class RouletteNet {
       if (!m) return;
       if (m.t === "chat") {
         this.emitChat(m.text);
+      } else if (m.t === "orient" && m.orient) {
+        this.hooks.onOrientChange?.(m.orient);
+      } else if (m.t === "chello") {
+        if (m.orient) {
+          this.hooks.onOrientChange?.(m.orient);
+        }
+        try {
+          c.send({ t: "orient", orient: this.myOrient } satisfies Wire);
+        } catch {
+          /* noop */
+        }
       } else if (m.t === "bye") {
         this.explicitBye = true;
         this.partnerLeft();

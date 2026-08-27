@@ -392,58 +392,63 @@ export class RoomStreamCompositor {
       const v0 = this.videoEls.get(s0.id);
       const v1 = this.videoEls.get(s1.id);
 
-      const isPort =
-        this.isPortrait ||
-        W < H ||
-        (typeof window !== "undefined" &&
-          (window.innerHeight >= window.innerWidth ||
-            window.matchMedia?.("(orientation: portrait)")?.matches === true)) ||
-        (!!v0 && v0.videoHeight > v0.videoWidth && !!v1 && v1.videoHeight > v1.videoWidth);
+      const isPort = this.isPortrait;
+
+      if (isPort && (this.canvas.width !== 720 || this.canvas.height !== 1280)) {
+        this.canvas.width = 720;
+        this.canvas.height = 1280;
+      } else if (!isPort && (this.canvas.width !== 1280 || this.canvas.height !== 720)) {
+        this.canvas.width = 1280;
+        this.canvas.height = 720;
+      }
+
+      const curW = this.canvas.width;
+      const curH = this.canvas.height;
 
       if (isPort) {
         // Портретний режим: вертикальне розташування один над одним (50% зверху, 50% знизу)
-        const halfH = H / 2;
+        const halfH = curH / 2;
 
         // Верхній слот (Користувач 1)
         if (v0 && v0.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
           const mirror = !!(s0.isSelf && s0.facingMode !== "environment");
-          drawFittedVideo(ctx, v0, 0, 0, W, halfH, mirror);
+          drawFittedVideo(ctx, v0, 0, 0, curW, halfH, mirror);
         } else {
           ctx.fillStyle = "#161310";
-          ctx.fillRect(0, 0, W, halfH);
+          ctx.fillRect(0, 0, curW, halfH);
           ctx.fillStyle = "rgba(235, 178, 95, 0.9)";
           ctx.font = "700 36px Unbounded, sans-serif";
           ctx.textAlign = "center";
-          ctx.fillText((s0.name || "K1").slice(0, 2).toUpperCase(), W / 2, halfH / 2 - 12);
+          ctx.fillText((s0.name || "K1").slice(0, 2).toUpperCase(), curW / 2, halfH / 2 - 12);
         }
         this.drawNameTag(ctx, s0.name, 16, halfH - 44);
 
         // Нижній слот (Користувач 2)
         if (v1 && v1.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
           const mirror = !!(s1.isSelf && s1.facingMode !== "environment");
-          drawFittedVideo(ctx, v1, 0, halfH, W, halfH, mirror);
+          drawFittedVideo(ctx, v1, 0, halfH, curW, halfH, mirror);
         } else {
           ctx.fillStyle = "#1c1813";
-          ctx.fillRect(0, halfH, W, halfH);
+          ctx.fillRect(0, halfH, curW, halfH);
           ctx.fillStyle = "rgba(75, 219, 154, 0.9)";
           ctx.font = "700 36px Unbounded, sans-serif";
           ctx.textAlign = "center";
-          ctx.fillText((s1.name || "K2").slice(0, 2).toUpperCase(), W / 2, halfH + halfH / 2 - 12);
+          ctx.fillText((s1.name || "K2").slice(0, 2).toUpperCase(), curW / 2, halfH + halfH / 2 - 12);
         }
-        this.drawNameTag(ctx, s1.name, 16, H - 44);
+        this.drawNameTag(ctx, s1.name, 16, curH - 44);
 
         // Горизонтальна лінія розподілу між верхнім і нижнім учасником
         ctx.strokeStyle = "rgba(235, 178, 95, 0.7)";
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(0, halfH);
-        ctx.lineTo(W, halfH);
+        ctx.lineTo(curW, halfH);
         ctx.stroke();
 
         // Маленький індикатор кімнати по центру лінії розподілу
         ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
         ctx.beginPath();
-        ctx.roundRect(W / 2 - 56, halfH - 13, 112, 26, 6);
+        ctx.roundRect(curW / 2 - 56, halfH - 13, 112, 26, 6);
         ctx.fill();
         ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
         ctx.lineWidth = 1;
@@ -452,45 +457,45 @@ export class RoomStreamCompositor {
         ctx.font = "600 12px 'JetBrains Mono', monospace";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText("2 УЧАСНИКИ", W / 2, halfH);
+        ctx.fillText("2 УЧАСНИКИ", curW / 2, halfH);
       } else {
         // Альбомний режим: горизонтальне розташування поруч (50% зліва, 50% справа)
-        const halfW = W / 2;
+        const halfW = curW / 2;
 
         // Ліва половина (Користувач 1)
         if (v0 && v0.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
           const mirror = !!(s0.isSelf && s0.facingMode !== "environment");
-          drawFittedVideo(ctx, v0, 0, 0, halfW, H, mirror);
+          drawFittedVideo(ctx, v0, 0, 0, halfW, curH, mirror);
         } else {
           ctx.fillStyle = "#161310";
-          ctx.fillRect(0, 0, halfW, H);
+          ctx.fillRect(0, 0, halfW, curH);
           ctx.fillStyle = "rgba(235, 178, 95, 0.9)";
           ctx.font = "700 36px Unbounded, sans-serif";
           ctx.textAlign = "center";
-          ctx.fillText((s0.name || "K1").slice(0, 2).toUpperCase(), halfW / 2, H / 2 - 12);
+          ctx.fillText((s0.name || "K1").slice(0, 2).toUpperCase(), halfW / 2, curH / 2 - 12);
         }
-        this.drawNameTag(ctx, s0.name, 16, H - 48);
+        this.drawNameTag(ctx, s0.name, 16, curH - 48);
 
         // Права половина (Користувач 2)
         if (v1 && v1.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
           const mirror = !!(s1.isSelf && s1.facingMode !== "environment");
-          drawFittedVideo(ctx, v1, halfW, 0, halfW, H, mirror);
+          drawFittedVideo(ctx, v1, halfW, 0, halfW, curH, mirror);
         } else {
           ctx.fillStyle = "#1c1813";
-          ctx.fillRect(halfW, 0, halfW, H);
+          ctx.fillRect(halfW, 0, halfW, curH);
           ctx.fillStyle = "rgba(75, 219, 154, 0.9)";
           ctx.font = "700 36px Unbounded, sans-serif";
           ctx.textAlign = "center";
-          ctx.fillText((s1.name || "K2").slice(0, 2).toUpperCase(), halfW + halfW / 2, H / 2 - 12);
+          ctx.fillText((s1.name || "K2").slice(0, 2).toUpperCase(), halfW + halfW / 2, curH / 2 - 12);
         }
-        this.drawNameTag(ctx, s1.name, halfW + 16, H - 48);
+        this.drawNameTag(ctx, s1.name, halfW + 16, curH - 48);
 
         // Центральна лінія розподілу екрану навпіл
         ctx.strokeStyle = "rgba(235, 178, 95, 0.7)";
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(halfW, 0);
-        ctx.lineTo(halfW, H);
+        ctx.lineTo(halfW, curH);
         ctx.stroke();
 
         // Маленький індикатор кімнати вгорі

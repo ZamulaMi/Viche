@@ -27,11 +27,20 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
   const [phase, setPhase] = useState<Phase>("idle");
   const [filters, setFilters] = useState<RouletteFilters>({ gender: "any", lang: "any", tags: [] });
   const [peer, setPeer] = useState<Peer | null>(null);
+  const detectUserOrient = (): "land" | "port" => {
+    if (typeof window === "undefined") return "land";
+    return window.innerHeight >= window.innerWidth ||
+      window.innerWidth < 640 ||
+      window.matchMedia?.("(orientation: portrait)")?.matches === true
+      ? "port"
+      : "land";
+  };
+
   const [advanced, setAdvanced] = useState(false);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [ice, setIce] = useState("");
-  const [orient, setOrient] = useState<"land" | "port">("land");
+  const [orient, setOrient] = useState<"land" | "port">(detectUserOrient);
   const [slot, setSlot] = useState(-1);
 
   const netRef = useRef<RouletteNet | null>(null);
@@ -40,6 +49,30 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
   const filtersRef = useRef(filters);
   const tRef = useRef(t);
   const toastRef = useRef(onToast);
+  const orientRef = useRef<"land" | "port">(orient);
+
+  useEffect(() => {
+    orientRef.current = orient;
+  }, [orient]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      const current = detectUserOrient();
+      setOrient((prev) => {
+        if (prev !== current) {
+          netRef.current?.sendOrientation(current);
+          return current;
+        }
+        return prev;
+      });
+    };
+    window.addEventListener("resize", handleResize);
+    window.addEventListener("orientationchange", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      window.removeEventListener("orientationchange", handleResize);
+    };
+  }, []);
 
   useEffect(() => {
     filtersRef.current = filters;
@@ -78,41 +111,48 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
   const openNet = useCallback((lm: LocalMedia) => {
     if (netRef.current) {
       netRef.current.updateStream(lm.stream);
+      netRef.current.sendOrientation(orientRef.current);
       return netRef.current;
     }
-    const net = new RouletteNet(lm.stream, {
-      onState: (s) => {
-        if (!liveRef.current) return;
-        // «live» встановлює onPair (коли вже є стрім і партнер)
-        if (s === "searching" || s === "connecting") setPhase("searching");
-        else if (s === "idle") setPhase("idle");
+    const net = new RouletteNet(
+      lm.stream,
+      {
+        onState: (s) => {
+          if (!liveRef.current) return;
+          // «live» встановлює onPair (коли вже є стрім і партнер)
+          if (s === "searching" || s === "connecting") setPhase("searching");
+          else if (s === "idle") setPhase("idle");
+        },
+        onSlot: (sl) => setSlot(sl),
+        onPair: (stream, peerId) => {
+          if (!liveRef.current) return;
+          const tail = peerId.replace(/[^0-9a-zA-Z]/g, "").slice(-4) || shortId(4);
+          const p: Peer = {
+            ...makePeer({ tags: [], langs: [] }),
+            id: tail,
+            name: "Учасник_" + tail,
+            real: true,
+          };
+          setPeer(p);
+          setRemoteStream(stream);
+          const curOrient = detectUserOrient();
+          setOrient(curOrient);
+          net.sendOrientation(curOrient);
+          setPhase("live");
+        },
+        onPeerLeft: () => {
+          if (!liveRef.current) return;
+          setPeer(null);
+          setRemoteStream(null);
+          setIce("");
+          setElapsed(0);
+          toastRef.current(tRef.current("toast.peerLeft"), "warn");
+          // пошук відновлює сам net — без ботів
+        },
+        onIce: (i) => setIce(i),
       },
-      onSlot: (sl) => setSlot(sl),
-      onPair: (stream, peerId) => {
-        if (!liveRef.current) return;
-        const tail = peerId.replace(/[^0-9a-zA-Z]/g, "").slice(-4) || shortId(4);
-        const p: Peer = {
-          ...makePeer({ tags: [], langs: [] }),
-          id: tail,
-          name: "Учасник_" + tail,
-          real: true,
-        };
-        setPeer(p);
-        setRemoteStream(stream);
-        setOrient("land");
-        setPhase("live");
-      },
-      onPeerLeft: () => {
-        if (!liveRef.current) return;
-        setPeer(null);
-        setRemoteStream(null);
-        setIce("");
-        setElapsed(0);
-        toastRef.current(tRef.current("toast.peerLeft"), "warn");
-        // пошук відновлює сам net — без ботів
-      },
-      onIce: (i) => setIce(i),
-    });
+      orientRef.current
+    );
     netRef.current = net;
     return net;
   }, []);
@@ -122,11 +162,16 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
       setPeer(null);
       setRemoteStream(null);
       setElapsed(0);
-      setOrient("land");
+      const curOrient = detectUserOrient();
+      setOrient(curOrient);
       setIce("");
       setPhase("searching");
       const lm = lmRef.current;
-      if (lm) openNet(lm).search(f);
+      if (lm) {
+        const net = openNet(lm);
+        net.sendOrientation(curOrient);
+        net.search(f);
+      }
     },
     [openNet]
   );
@@ -195,7 +240,9 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
           <div
             className={`relative bg-[var(--c-bg2)] transition-all duration-300 w-full mx-auto overflow-hidden ${
               phase === "live"
-                ? "aspect-[16/10] sm:aspect-[16/9] max-h-[min(76dvh,780px)] min-h-[300px] sm:min-h-[440px]"
+                ? orient === "port"
+                  ? "aspect-[9/16] max-h-[min(82dvh,780px)] min-h-[380px] max-w-[460px]"
+                  : "aspect-[16/10] sm:aspect-[16/9] max-h-[min(76dvh,780px)] min-h-[300px] sm:min-h-[440px]"
                 : "aspect-[4/3] max-h-[min(48dvh,500px)] sm:max-h-[min(66dvh,640px)] min-h-[230px]"
             }`}
           >
@@ -204,7 +251,10 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
                 peer={peer}
                 remoteStream={remoteStream}
                 setRemoteSpeaking={() => {}}
-                onOrient={setOrient}
+                onOrient={(o) => {
+                  setOrient(o);
+                  netRef.current?.sendOrientation(o);
+                }}
                 chat={netRef.current ? { ...netRef.current.chat } : undefined}
                 localMedia={localMedia}
                 onStreamUpdate={(s, track) => {

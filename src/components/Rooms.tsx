@@ -230,14 +230,14 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   const [isFull, setIsFull] = useState(false);
   const [isPortrait, setIsPortrait] = useState(() => {
     if (typeof window === "undefined") return false;
-    const isTall = window.innerHeight >= window.innerWidth;
+    const isTall = window.innerHeight >= window.innerWidth || window.innerWidth < 640;
     const matchMediaPortrait = window.matchMedia?.("(orientation: portrait)")?.matches;
     return isTall || matchMediaPortrait === true;
   });
 
   useEffect(() => {
     const updateOrient = () => {
-      const isTall = window.innerHeight >= window.innerWidth;
+      const isTall = window.innerHeight >= window.innerWidth || window.innerWidth < 640;
       const matchMediaPortrait = window.matchMedia?.("(orientation: portrait)")?.matches;
       setIsPortrait(isTall || matchMediaPortrait === true);
     };
@@ -271,6 +271,12 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
     tRef.current = t;
   }, [t]);
 
+  const [guestOrient, setGuestOrient] = useState<"land" | "port" | null>(null);
+  const guestOrientRef = useRef<"land" | "port" | null>(null);
+  useEffect(() => {
+    guestOrientRef.current = guestOrient;
+  }, [guestOrient]);
+
   // Джерела відео та аудіо кімнати для компонування гостю з рулетки (1 або 2 людини)
   const currentSources = useMemo<RoomSource[]>(() => {
     const list: RoomSource[] = [];
@@ -300,12 +306,13 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
     return list.slice(0, 2);
   }, [roster, streams, selfStream, localMedia, facingMode, name, t]);
 
-  // Оновлюємо композитор у реальному часі при зміні учасників, потоків або орієнтації
+  // Оновлюємо композитор у реальному часі при зміні учасників, потоків або орієнтації гостя рулетки
   useEffect(() => {
     if (compositorRef.current) {
-      compositorRef.current.updateSources(currentSources, isPortrait);
+      const isPort = guestOrient ? guestOrient === "port" : isPortrait;
+      compositorRef.current.updateSources(currentSources, isPort);
     }
-  }, [currentSources, isPortrait]);
+  }, [currentSources, isPortrait, guestOrient]);
 
   const toggleMic = () => {
     setMicOn((v) => {
@@ -607,66 +614,90 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
     setSearching(true);
 
     // Ініціалізуємо або оновлюємо композитор кімнати (потоки 1 або 2 людей)
+    const effectiveIsPort = guestOrientRef.current ? guestOrientRef.current === "port" : isPortrait;
     if (!compositorRef.current) {
-      compositorRef.current = new RoomStreamCompositor(currentSources, isPortrait);
+      compositorRef.current = new RoomStreamCompositor(currentSources, effectiveIsPort);
     } else {
-      compositorRef.current.updateSources(currentSources, isPortrait);
+      compositorRef.current.updateSources(currentSources, effectiveIsPort);
     }
     const outboundStream = compositorRef.current.compositeStream;
 
-    const hunter = new RouletteNet(outboundStream, {
-      onState: () => {},
-      onSlot: () => {},
-      onPair: (stream, peerId) => {
-        if (!aliveRef.current) return;
-        pendingHunter.current = null;
-        const tail = peerId.replace(/[^0-9]/g, "") || peerId.slice(-3);
-        const name = "Гість_" + tail;
-
-        // Створюємо або оновлюємо чистий ретрансляційний потік
-        const prevH = huntersRef.current.find((h) => h.id === peerId || h.net === hunter);
-        let relayInstance: StreamRelay;
-        if (prevH?.relay) {
-          prevH.relay.updateSource(stream);
-          relayInstance = prevH.relay;
-        } else {
-          relayInstance = new StreamRelay(stream);
-        }
-
-        // upsert: подія "stream" може повторитись (ICE restart) — не
-        // додаємо дублікат, а оновлюємо потік того самого гостя
-        setHunters((hs) => {
-          const exists = hs.some((h) => h.net === hunter || h.id === peerId);
-          if (exists) {
-            return hs.map((h) => (h.net === hunter || h.id === peerId ? { ...h, stream, relay: relayInstance } : h));
+    const hunter = new RouletteNet(
+      outboundStream,
+      {
+        onState: () => {},
+        onSlot: () => {},
+        onOrientChange: (guestOrientation) => {
+          if (!aliveRef.current) return;
+          guestOrientRef.current = guestOrientation;
+          setGuestOrient(guestOrientation);
+          const isPort = guestOrientation === "port";
+          if (compositorRef.current) {
+            compositorRef.current.setPortrait(isPort);
+            compositorRef.current.updateSources(currentSources, isPort);
           }
-          return [...hs, { id: peerId, name, stream, net: hunter, relay: relayInstance }];
-        });
-        // головне: хост ретранслює стабільний локальний потік випадкового гостя ВСІМ учасникам
-        netRef.current?.shareAuxStream(peerId, name, relayInstance.relayedStream);
-        push("sys", `${name} ${t("room.guestJoined")} · ${t("room.randomBadge")}`);
-        setSearching(false);
-      },
-      onPeerLeft: () => {
-        if (!aliveRef.current) return;
-        const gone = huntersRef.current.find((h) => h.net === hunter);
-        if (gone) {
-          gone.relay?.dispose();
-          netRef.current?.stopShareAuxStream(gone.id);
-        }
-        setHunters((hs) => {
-          const next = hs.filter((h) => h.net !== hunter);
-          if (next.length === 0) {
-            compositorRef.current?.dispose();
-            compositorRef.current = null;
+        },
+        onPair: (stream, peerId) => {
+          if (!aliveRef.current) return;
+          pendingHunter.current = null;
+          const tail = peerId.replace(/[^0-9]/g, "") || peerId.slice(-3);
+          const name = "Гість_" + tail;
+
+          // Якщо орієнтація гостя вже відома або оновлена — підлаштовуємо композитор
+          if (guestOrientRef.current && compositorRef.current) {
+            const isPort = guestOrientRef.current === "port";
+            compositorRef.current.setPortrait(isPort);
+            compositorRef.current.updateSources(currentSources, isPort);
           }
-          return next;
-        });
-        hunter.dispose();
-        push("sys", t("room.guestLeft"));
+
+          // Створюємо або оновлюємо чистий ретрансляційний потік
+          const prevH = huntersRef.current.find((h) => h.id === peerId || h.net === hunter);
+          let relayInstance: StreamRelay;
+          if (prevH?.relay) {
+            prevH.relay.updateSource(stream);
+            relayInstance = prevH.relay;
+          } else {
+            relayInstance = new StreamRelay(stream);
+          }
+
+          // upsert: подія "stream" може повторитись (ICE restart) — не
+          // додаємо дублікат, а оновлюємо потік того самого гостя
+          setHunters((hs) => {
+            const exists = hs.some((h) => h.net === hunter || h.id === peerId);
+            if (exists) {
+              return hs.map((h) => (h.net === hunter || h.id === peerId ? { ...h, stream, relay: relayInstance } : h));
+            }
+            return [...hs, { id: peerId, name, stream, net: hunter, relay: relayInstance }];
+          });
+          // головне: хост ретранслює стабільний локальний потік випадкового гостя ВСІМ учасникам
+          netRef.current?.shareAuxStream(peerId, name, relayInstance.relayedStream);
+          push("sys", `${name} ${t("room.guestJoined")} · ${t("room.randomBadge")}`);
+          setSearching(false);
+        },
+        onPeerLeft: () => {
+          if (!aliveRef.current) return;
+          guestOrientRef.current = null;
+          setGuestOrient(null);
+          const gone = huntersRef.current.find((h) => h.net === hunter);
+          if (gone) {
+            gone.relay?.dispose();
+            netRef.current?.stopShareAuxStream(gone.id);
+          }
+          setHunters((hs) => {
+            const next = hs.filter((h) => h.net !== hunter);
+            if (next.length === 0) {
+              compositorRef.current?.dispose();
+              compositorRef.current = null;
+            }
+            return next;
+          });
+          hunter.dispose();
+          push("sys", t("room.guestLeft"));
+        },
+        onIce: () => {},
       },
-      onIce: () => {},
-    });
+      isPortrait ? "port" : "land"
+    );
     pendingHunter.current = hunter;
     hunter.search({ gender: "any", lang: "any", tags: [] });
   };
@@ -806,8 +837,8 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
                   } else {
                     // Горизонтальна орієнтація: зліва та справа
                     return isFull
-                      ? "grid-cols-2 grid-rows-1 h-[calc(100dvh-130px)] sm:h-[calc(100dvh-150px)] max-h-full w-full"
-                      : "grid-cols-2 sm:grid-cols-2";
+                      ? "grid-cols-2 grid-rows-1 portrait:grid-cols-1 portrait:grid-rows-2 h-[calc(100dvh-130px)] sm:h-[calc(100dvh-150px)] max-h-full w-full"
+                      : "grid-cols-2 sm:grid-cols-2 portrait:grid-cols-1 portrait:grid-rows-2";
                   }
                 }
                 if (isFull) {
