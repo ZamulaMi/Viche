@@ -386,14 +386,21 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
               disabled={busy || phase === "live"}
               style={busy || phase === "live" ? { opacity: 0.45, pointerEvents: "none" } : undefined}
             >
-              <IconBolt className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              <IconBolt className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[var(--c-amber)]" />
               {t("ctl.advanced")}
+              <span className="font-mono text-[9.5px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[var(--c-amber)]/15 text-[var(--c-amber)] font-semibold border border-[var(--c-amber)]/25">
+                {t("ctl.advancedSoon")}
+              </span>
               <span className="hidden md:inline font-mono text-[10px] opacity-70">· {t("ctl.advancedHint")}</span>
             </button>
           </div>
 
           <div className={`grid transition-all duration-300 overflow-hidden ${advanced ? "grid-rows-[1fr] mt-5 opacity-100" : "grid-rows-[0fr] opacity-0"}`}>
             <div className="min-h-0 overflow-hidden">
+              <div className="mb-3.5 px-3.5 py-2.5 rounded-lg bg-[var(--c-surface)] border border-[var(--c-line2)] flex items-center gap-2.5 text-[12px] sm:text-[12.5px] text-[var(--c-muted)]">
+                <span className="w-2 h-2 rounded-full bg-[var(--c-amber)] animate-pulse shrink-0" />
+                <span>{t("ctl.advancedNote")}</span>
+              </div>
               <div className="grid sm:grid-cols-[auto_1fr] gap-x-8 gap-y-4">
                 <div>
                   <p className="panel-title mb-2">{t("flt.gender")}</p>
