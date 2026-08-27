@@ -118,7 +118,6 @@ function Tile({
   fillHeight?: boolean;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
-  const [port, setPort] = useState(false);
   const [trackMuted, setTrackMuted] = useState(false);
   const [videoTrackMuted, setVideoTrackMuted] = useState(false);
 
@@ -163,16 +162,17 @@ function Tile({
   useEffect(() => {
     const v = ref.current;
     if (!v) return;
-    v.srcObject = stream;
-    const play = () => {
-      v.play().catch(() => {});
-    };
-    v.onloadedmetadata = () => {
-      setPort(v.videoWidth > 0 && v.videoHeight > 0 && v.videoWidth < v.videoHeight);
-      play();
-    };
-    v.oncanplay = play;
-    play();
+    if (stream) {
+      if (v.srcObject !== stream) {
+        v.srcObject = stream;
+      }
+      const playPromise = v.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(() => {});
+      }
+    } else {
+      v.srcObject = null;
+    }
   }, [stream]);
   const tone =
     badgeTone === "mint"
@@ -189,9 +189,7 @@ function Tile({
       className={`group relative w-full ${
         fillHeight
           ? "h-full min-h-0 flex-1"
-          : port
-          ? "aspect-[3/4] max-w-[300px] mx-auto"
-          : "aspect-[4/3]"
+          : "aspect-[16/10] sm:aspect-[16/9] min-h-[160px]"
       } rounded-xl overflow-hidden border border-[var(--c-line)] bg-black`}
     >
       <video
@@ -199,7 +197,7 @@ function Tile({
         autoPlay
         playsInline
         muted={muted}
-        className={`absolute inset-0 w-full h-full object-contain transition-transform duration-300 ${
+        className={`absolute inset-0 w-full h-full object-contain ${
           isSelf && facingMode !== "environment" ? "-scale-x-100" : "scale-x-100"
         }`}
       />

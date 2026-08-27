@@ -221,13 +221,20 @@ export default function VideoChat({
     if (from === "peer") setUnread((u) => u + 1);
   }, []);
 
-  /* підключення медіа */
+  /* підключення медіа: швидкий запуск без переривання декодера */
   useEffect(() => {
     const v = remoteRef.current;
-    if (v && remoteStream) {
-      v.srcObject = remoteStream;
-      v.onloadedmetadata = () => v.play().catch(() => {});
-      v.play().catch(() => {});
+    if (!v) return;
+    if (remoteStream) {
+      if (v.srcObject !== remoteStream) {
+        v.srcObject = remoteStream;
+      }
+      const playPromise = v.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(() => {});
+      }
+    } else {
+      v.srcObject = null;
     }
   }, [remoteStream]);
 
@@ -595,7 +602,7 @@ export default function VideoChat({
           : "absolute inset-0 bg-black overflow-visible"
       }`}
     >
-      {/* remote: відео займає максимальну доступну площу без обрізки */}
+      {/* remote: відео займає максимальну доступну площу без обрізки та без затримок адаптації */}
       <video
         ref={remoteRef}
         autoPlay
@@ -606,19 +613,7 @@ export default function VideoChat({
             onOrient?.(v.videoWidth < v.videoHeight ? "port" : "land");
           }
         }}
-        onResize={(e) => {
-          const v = e.currentTarget;
-          if (v.videoWidth > 0 && v.videoHeight > 0) {
-            onOrient?.(v.videoWidth < v.videoHeight ? "port" : "land");
-          }
-        }}
-        onPlaying={(e) => {
-          const v = e.currentTarget;
-          if (v.videoWidth > 0 && v.videoHeight > 0) {
-            onOrient?.(v.videoWidth < v.videoHeight ? "port" : "land");
-          }
-        }}
-        className="absolute inset-0 w-full h-full object-contain bg-black transition-all duration-150"
+        className="absolute inset-0 w-full h-full object-contain bg-black"
       />
 
       {/* верхня панель: статус + пір */}

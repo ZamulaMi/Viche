@@ -113,7 +113,7 @@ export function restartIceOn(call: MediaConnection | null | undefined): boolean 
   return false;
 }
 
-/* Оптимізація бітрейту та параметрів енкодера (запобігає нагріванню процесора/GPU та економить заряд батареї) */
+/* Оптимізація бітрейту та параметрів енкодера: миттєва адаптація без падіння роздільності та без перегріву */
 export function optimizeSenderBitrate(pc: RTCPeerConnection | null | undefined) {
   if (!pc) return;
   try {
@@ -125,10 +125,10 @@ export function optimizeSenderBitrate(pc: RTCPeerConnection | null | undefined) 
           if (!params.encodings || params.encodings.length === 0) {
             params.encodings = [{}];
           }
-          // 850 kbps і 30 fps достатньо для чіткого відео 480p/720p без перевантаження термопакета пристрою
-          params.encodings[0].maxBitrate = 850_000;
+          // 1.5 Mbps та збалансована деградація забезпечують швидкий чіткий старт без змазування та затримок
+          params.encodings[0].maxBitrate = 1_500_000;
           params.encodings[0].maxFramerate = 30;
-          params.degradationPreference = "maintain-framerate";
+          params.degradationPreference = "balanced";
           sender.setParameters(params).catch(() => {});
         } catch {
           /* noop */

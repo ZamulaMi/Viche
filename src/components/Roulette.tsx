@@ -263,13 +263,7 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
         {/* ── Сцена: карточка сцени .card ── */}
         <div className="card overflow-hidden relative w-full">
           <div
-            className={`relative bg-[var(--c-bg2)] transition-all duration-150 ease-out w-full mx-auto overflow-hidden ${
-              phase === "live"
-                ? orient === "port"
-                  ? "aspect-[9/16] max-h-[min(82dvh,780px)] min-h-[380px] max-w-[460px]"
-                  : "aspect-[16/10] sm:aspect-[16/9] max-h-[min(76dvh,780px)] min-h-[300px] sm:min-h-[440px]"
-                : "aspect-[4/3] max-h-[min(48dvh,500px)] sm:max-h-[min(66dvh,640px)] min-h-[230px]"
-            }`}
+            className="relative bg-[var(--c-bg2)] w-full mx-auto overflow-hidden aspect-[16/10] sm:aspect-[16/9] max-h-[min(76dvh,780px)] min-h-[300px] sm:min-h-[440px]"
           >
             {phase === "live" && peer ? (
               <VideoChat
@@ -286,7 +280,6 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
                 }}
                 onOrient={(o) => {
                   setOrient(o);
-                  netRef.current?.sendOrientation(o);
                 }}
                 chat={netRef.current ? { ...netRef.current.chat } : undefined}
                 localMedia={localMedia}
