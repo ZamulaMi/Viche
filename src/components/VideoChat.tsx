@@ -79,7 +79,7 @@ export default function VideoChat({
   const [facingMode, setFacingMode] = useState<FacingMode>(localMedia?.facingMode ?? "user");
   const [switchingCam, setSwitchingCam] = useState(false);
 
-  /* перетягування PiP-вікна */
+  /* перетягування та магнітне прилипання (snap to edge) PiP-вікна */
   const pipRef = useRef<HTMLDivElement>(null);
   const [pipPos, setPipPos] = useState<{ x: number; y: number } | null>(null);
   const [isDraggingPip, setIsDraggingPip] = useState(false);
@@ -119,11 +119,24 @@ export default function VideoChat({
       const dx = moveEv.clientX - dragStartRef.current.startX;
       const dy = moveEv.clientY - dragStartRef.current.startY;
 
-      const maxX = Math.max(8, cRect.width - pRect.width - 8);
-      const maxY = Math.max(8, cRect.height - pRect.height - 8);
+      const minX = 8;
+      const minY = 8;
+      const maxX = Math.max(minX, cRect.width - pRect.width - 8);
+      const maxY = Math.max(minY, cRect.height - pRect.height - 8);
 
-      const nextX = Math.min(Math.max(8, dragStartRef.current.origX + dx), maxX);
-      const nextY = Math.min(Math.max(8, dragStartRef.current.origY + dy), maxY);
+      let rawX = dragStartRef.current.origX + dx;
+      let rawY = dragStartRef.current.origY + dy;
+
+      // Магнітне притягання при наближенні до країв під час руху
+      const snapThreshold = 24;
+      if (rawX - minX < snapThreshold) rawX = minX;
+      else if (maxX - rawX < snapThreshold) rawX = maxX;
+
+      if (rawY - minY < snapThreshold) rawY = minY;
+      else if (maxY - rawY < snapThreshold) rawY = maxY;
+
+      const nextX = Math.min(Math.max(minX, rawX), maxX);
+      const nextY = Math.min(Math.max(minY, rawY), maxY);
 
       setPipPos({ x: nextX, y: nextY });
     };
@@ -134,6 +147,39 @@ export default function VideoChat({
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
+
+      // Автоматичне примагнічування до найближчого краю або кута після відпускання
+      setPipPos((prev) => {
+        if (!prev || !boxRef.current || !pipRef.current) return prev;
+        const cRect = boxRef.current.getBoundingClientRect();
+        const pRect = pipRef.current.getBoundingClientRect();
+
+        const padX = cRect.width < 640 ? 8 : 12;
+        const padTop = 50; // безпечний відступ від верхнього статусу
+        const padBottom = 72; // безпечний відступ від нижньої панелі керування
+
+        const minX = padX;
+        const maxX = Math.max(minX, cRect.width - pRect.width - padX);
+        const minY = padTop;
+        const maxY = Math.max(minY, cRect.height - pRect.height - padBottom);
+
+        // Примагнічуємо до лівого або правого краю
+        const snapLeft = prev.x + pRect.width / 2 < cRect.width / 2;
+        const snappedX = snapLeft ? minX : maxX;
+
+        // По вертикалі: якщо близько до верху/низу — примагнічуємо до кутів, інакше зберігаємо плавне положення
+        let snappedY = prev.y;
+        const vSnapThreshold = 48;
+        if (prev.y - minY < vSnapThreshold) {
+          snappedY = minY;
+        } else if (maxY - prev.y < vSnapThreshold) {
+          snappedY = maxY;
+        } else {
+          snappedY = Math.min(Math.max(minY, prev.y), maxY);
+        }
+
+        return { x: snappedX, y: snappedY };
+      });
     };
 
     window.addEventListener("pointermove", onPointerMove);
@@ -147,12 +193,19 @@ export default function VideoChat({
         if (!prev || !boxRef.current || !pipRef.current) return prev;
         const cRect = boxRef.current.getBoundingClientRect();
         const pRect = pipRef.current.getBoundingClientRect();
-        const maxX = Math.max(8, cRect.width - pRect.width - 8);
-        const maxY = Math.max(8, cRect.height - pRect.height - 8);
-        return {
-          x: Math.min(Math.max(8, prev.x), maxX),
-          y: Math.min(Math.max(8, prev.y), maxY),
-        };
+        const padX = cRect.width < 640 ? 8 : 12;
+        const padTop = 50;
+        const padBottom = 72;
+        const minX = padX;
+        const maxX = Math.max(minX, cRect.width - pRect.width - padX);
+        const minY = padTop;
+        const maxY = Math.max(minY, cRect.height - pRect.height - padBottom);
+
+        const snapLeft = prev.x + pRect.width / 2 < cRect.width / 2;
+        const snappedX = snapLeft ? minX : maxX;
+        const clampedY = Math.min(Math.max(minY, prev.y), maxY);
+
+        return { x: snappedX, y: clampedY };
       });
     };
     window.addEventListener("resize", handleResize);
@@ -576,17 +629,19 @@ export default function VideoChat({
         );
       })()}
 
-      {/* локальне відео (PiP з можливістю вільного перетягування) */}
+      {/* локальне відео (PiP з можливістю вільного перетягування та примагнічування до країв) */}
       <div
         ref={pipRef}
         onPointerDown={handlePipPointerDown}
         style={pipPos ? { left: `${pipPos.x}px`, top: `${pipPos.y}px` } : undefined}
         className={`absolute ${
           pipPos ? "" : "right-2 sm:right-3 bottom-14 sm:bottom-20"
-        } w-24 sm:w-36 md:w-44 aspect-[4/3] rounded-lg overflow-hidden border border-[var(--c-line2)] shadow-[var(--c-shadow)] z-20 bg-black touch-none select-none cursor-grab active:cursor-grabbing transition-shadow ${
-          isDraggingPip ? "ring-2 ring-[var(--c-amber)] shadow-2xl scale-[1.02]" : "hover:border-[var(--c-amber)]/60"
+        } w-24 sm:w-36 md:w-44 aspect-[4/3] rounded-lg overflow-hidden border border-[var(--c-line2)] shadow-[var(--c-shadow)] z-20 bg-black touch-none select-none cursor-grab active:cursor-grabbing ${
+          isDraggingPip
+            ? "transition-none ring-2 ring-[var(--c-amber)] shadow-2xl scale-[1.03]"
+            : "transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-[var(--c-amber)]/60"
         }`}
-        title="Перетягуйте вікно"
+        title="Перетягуйте вікно (примагнічується до країв)"
       >
         {localMedia?.isReal ? (
           <video

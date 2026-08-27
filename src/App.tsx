@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { I18nProvider, useI18n, type Lang } from "./i18n";
-import { shortId } from "./lib/sim";
 import { getLocalStream, prefersReducedMotion, type LocalMedia } from "./lib/rtc";
 import { useScramble } from "./lib/hooks";
 import Roulette from "./components/Roulette";
@@ -154,18 +153,11 @@ function Shell() {
   }, []);
 
   const brand = useScramble("VICHE", 120);
-  const sessionId = useMemo(() => "SES-" + shortId(4), []);
 
   const NAV: Array<{ v: View; k: string; icon: React.ReactNode; key: string }> = [
     { v: "roulette", k: "1", icon: <IconShuffle className="w-5 h-5" />, key: "nav.roulette" },
     { v: "rooms", k: "2", icon: <IconRooms className="w-5 h-5" />, key: "nav.rooms" },
   ];
-
-  const mediaWord = localMedia
-    ? localMedia.hasCam
-      ? t("stat.mediaCam")
-      : t("stat.mediaAvatar")
-    : t("stat.mediaPending");
 
   return (
     <div className="min-h-screen relative">
@@ -238,16 +230,6 @@ function Shell() {
                 <span className="font-700 text-[14px] flex-1">{t(n.key as never)}</span>
               </button>
             ))}
-            <div className="mt-auto pt-6">
-              <div className="rounded-lg border border-[var(--c-line)] bg-[var(--c-panel)] px-3.5 py-3">
-                <p className="flex items-center gap-2 font-mono text-[10.5px] text-[var(--c-mint)]">
-                  <span className="led led-mint" /> {sessionId}
-                </p>
-                <p className="font-mono text-[10px] text-[var(--c-faint)] mt-1.5 leading-relaxed">
-                  {mediaWord}<br />{lang.toUpperCase()} · viche v1.0
-                </p>
-              </div>
-            </div>
           </aside>
 
           {/* ── Контент ── */}
