@@ -79,6 +79,86 @@ export default function VideoChat({
   const [facingMode, setFacingMode] = useState<FacingMode>(localMedia?.facingMode ?? "user");
   const [switchingCam, setSwitchingCam] = useState(false);
 
+  /* перетягування PiP-вікна */
+  const pipRef = useRef<HTMLDivElement>(null);
+  const [pipPos, setPipPos] = useState<{ x: number; y: number } | null>(null);
+  const [isDraggingPip, setIsDraggingPip] = useState(false);
+  const dragStartRef = useRef<{
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+  } | null>(null);
+
+  const handlePipPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    // Якщо клік на кнопку (наприклад перемикач камери), не ініціюємо перетягування
+    if ((e.target as HTMLElement).closest("button")) return;
+    const pipEl = pipRef.current;
+    const containerEl = boxRef.current;
+    if (!pipEl || !containerEl) return;
+
+    e.preventDefault();
+    const pipRect = pipEl.getBoundingClientRect();
+    const containerRect = containerEl.getBoundingClientRect();
+
+    const currentX = pipRect.left - containerRect.left;
+    const currentY = pipRect.top - containerRect.top;
+
+    dragStartRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: currentX,
+      origY: currentY,
+    };
+    setIsDraggingPip(true);
+
+    const onPointerMove = (moveEv: PointerEvent) => {
+      if (!dragStartRef.current || !pipRef.current || !boxRef.current) return;
+      const cRect = boxRef.current.getBoundingClientRect();
+      const pRect = pipRef.current.getBoundingClientRect();
+      const dx = moveEv.clientX - dragStartRef.current.startX;
+      const dy = moveEv.clientY - dragStartRef.current.startY;
+
+      const maxX = Math.max(8, cRect.width - pRect.width - 8);
+      const maxY = Math.max(8, cRect.height - pRect.height - 8);
+
+      const nextX = Math.min(Math.max(8, dragStartRef.current.origX + dx), maxX);
+      const nextY = Math.min(Math.max(8, dragStartRef.current.origY + dy), maxY);
+
+      setPipPos({ x: nextX, y: nextY });
+    };
+
+    const onPointerUp = () => {
+      dragStartRef.current = null;
+      setIsDraggingPip(false);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+  };
+
+  useEffect(() => {
+    const handleResize = () => {
+      setPipPos((prev) => {
+        if (!prev || !boxRef.current || !pipRef.current) return prev;
+        const cRect = boxRef.current.getBoundingClientRect();
+        const pRect = pipRef.current.getBoundingClientRect();
+        const maxX = Math.max(8, cRect.width - pRect.width - 8);
+        const maxY = Math.max(8, cRect.height - pRect.height - 8);
+        return {
+          x: Math.min(Math.max(8, prev.x), maxX),
+          y: Math.min(Math.max(8, prev.y), maxY),
+        };
+      });
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
   const peerLang = peer.langs.includes("uk") ? "uk" : "en";
 
   const push = useCallback((from: Msg["from"], text: string) => {
@@ -496,29 +576,39 @@ export default function VideoChat({
         );
       })()}
 
-      {/* локальне відео (PiP) */}
-      <div className="absolute right-2 sm:right-3 bottom-14 sm:bottom-20 w-24 sm:w-36 md:w-44 aspect-[4/3] rounded-lg overflow-hidden border border-[var(--c-line2)] shadow-[var(--c-shadow)] z-20 bg-black">
+      {/* локальне відео (PiP з можливістю вільного перетягування) */}
+      <div
+        ref={pipRef}
+        onPointerDown={handlePipPointerDown}
+        style={pipPos ? { left: `${pipPos.x}px`, top: `${pipPos.y}px` } : undefined}
+        className={`absolute ${
+          pipPos ? "" : "right-2 sm:right-3 bottom-14 sm:bottom-20"
+        } w-24 sm:w-36 md:w-44 aspect-[4/3] rounded-lg overflow-hidden border border-[var(--c-line2)] shadow-[var(--c-shadow)] z-20 bg-black touch-none select-none cursor-grab active:cursor-grabbing transition-shadow ${
+          isDraggingPip ? "ring-2 ring-[var(--c-amber)] shadow-2xl scale-[1.02]" : "hover:border-[var(--c-amber)]/60"
+        }`}
+        title="Перетягуйте вікно"
+      >
         {localMedia?.isReal ? (
           <video
             ref={localRef}
             autoPlay
             playsInline
             muted
-            className={`w-full h-full object-contain bg-black transition-transform duration-300 ${
+            className={`w-full h-full object-contain bg-black pointer-events-none transition-transform duration-300 ${
               facingMode === "environment" ? "scale-x-100" : "-scale-x-100"
             }`}
           />
         ) : (
-          <div className="w-full h-full grid place-items-center">
+          <div className="w-full h-full grid place-items-center pointer-events-none">
             <span className="font-display text-xl sm:text-2xl text-[var(--c-amber)]">TI</span>
           </div>
         )}
         {!camOn && (
-          <div className="absolute inset-0 bg-[var(--c-bg)] grid place-items-center">
+          <div className="absolute inset-0 bg-[var(--c-bg)] grid place-items-center pointer-events-none">
             <IconCamOff className="w-5 h-5 sm:w-6 sm:h-6 text-[var(--c-faint)]" />
           </div>
         )}
-        <div className="absolute top-1 left-1.5 flex items-center gap-1.5 z-30">
+        <div className="absolute top-1 left-1.5 flex items-center gap-1.5 z-30 pointer-events-none">
           <span className="font-mono text-[9px] sm:text-[10px] tracking-widest text-[var(--c-mint)]">{t("video.you")}</span>
           <span
             className={`inline-flex items-center justify-center p-0.5 rounded border backdrop-blur-sm ${

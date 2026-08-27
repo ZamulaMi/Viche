@@ -550,9 +550,13 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
         creatorRef.current = asCreator;
         setRoom(r);
         setScreen("room");
+        setStatus(asCreator ? "host" : "connecting");
         setMsgs([]);
-        prevRoster.current = [];
-        setRoster([]);
+        const effectiveName = name.trim() || "Гість_" + shortId(4);
+        const hostId = "viche-v1-r-" + roomIdStr(r);
+        const initialMember: Member = { id: asCreator ? hostId : "self", name: effectiveName };
+        prevRoster.current = [initialMember];
+        setRoster([initialMember]);
         setStreams({});
         setAuxStreams({});
         setPeerMics({});
@@ -938,7 +942,13 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
           {/* ── Сітка учасників (якщо 2 учасники: вертикально — зверху/знизу 50/50, горизонтально — справа/зліва 50/50 як у звичайному, так і у повноекранному режимі) ── */}
           <div className="min-w-0 flex-1 h-full flex flex-col">
             {(() => {
-              const totalTiles = roster.length + hunters.length + Object.keys(auxStreams).length;
+              const hostId = netRef.current?.hostId || ("viche-v1-r-" + roomIdStr(room));
+              const myId = netRef.current?.myId;
+              const effectiveRoster = roster.length > 0
+                ? roster
+                : [{ id: isHost ? hostId : "self", name: name.trim() || t("room.you") }];
+
+              const totalTiles = effectiveRoster.length + hunters.length + Object.keys(auxStreams).length;
               const isTwoPeople = totalTiles === 2 || filled === 2;
               const fillTile = isTwoPeople && (isFull || isPortrait);
 
@@ -959,8 +969,8 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
                 if (isFull) {
                   return "grid-cols-1 sm:grid-cols-2";
                 }
-                if (filled === 1) {
-                  return "grid-cols-1 max-w-xl mx-auto";
+                if (filled <= 1) {
+                  return "grid-cols-1 max-w-xl mx-auto w-full";
                 }
                 return "grid-cols-1 sm:grid-cols-2";
               })();
@@ -968,17 +978,28 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
               return (
                 <div className={`grid gap-2.5 sm:gap-3 ${gridLayoutClass}`}>
                   {/* реальні учасники (mesh P2P) */}
-                  {roster.map((m) => {
-                    const self = netRef.current?.myId === m.id;
+                  {effectiveRoster.map((m) => {
+                    const self =
+                      (myId ? myId === m.id : false) ||
+                      m.id === "self" ||
+                      (isHost && (m.id === hostId || m.id === netRef.current?.hostId)) ||
+                      (effectiveRoster.length === 1 && !m.id.startsWith("guest_"));
                     const st = self ? (selfStream || localMedia?.stream) : streams[m.id];
                     const memberMic = self ? micOn : (peerMics[m.id] !== undefined ? peerMics[m.id] : undefined);
                     const memberCam = self ? camOn : (peerCams[m.id] !== undefined ? peerCams[m.id] : undefined);
+                    const badgeText = self
+                      ? (isHost ? `${t("room.you")} · ${t("room.admin")}` : t("room.you"))
+                      : (m.id === hostId || m.id === netRef.current?.hostId ? t("room.admin") : "p2p");
+                    const displayName = self
+                      ? (m.name.includes(t("room.you")) ? m.name : `${m.name} · ${t("room.you")}`)
+                      : m.name;
+
                     return st ? (
                       <Tile
                         key={m.id}
                         stream={st}
-                        name={self ? `${m.name} · ${t("room.you")}` : m.name}
-                        badge={self ? t("room.you") : m.id === netRef.current?.hostId ? t("room.admin") : "p2p"}
+                        name={displayName}
+                        badge={badgeText}
                         badgeTone={self ? "amber" : "mint"}
                         muted={self}
                         micOn={memberMic}
