@@ -11,7 +11,7 @@
   "orientation": "any",
   "icons": [
     {
-      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230D1712'/%3E%3Cpath d='M7 8l9 17L25 8' stroke='%23F0A83C' stroke-width='3.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='16' cy='25' r='2.4' fill='%2343D69A'/%3E%3C/svg%3E",
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cstyle%3E.bg%7Bfill:%230d1712;stroke:%232c4737;%7D.fg%7Bfill:%23e9f1ea;%7D.cut%7Bstroke:%230d1712;stroke-linecap:round;stroke-linejoin:round;%7D@media(prefers-color-scheme:light)%7B.bg%7Bfill:%23ffffff;stroke:%23b7cabc;%7D.fg%7Bfill:%2315251c;%7D.cut%7Bstroke:%23ffffff;%7D%7D%3C/style%3E%3Crect class='bg' width='32' height='32' rx='8' stroke-width='1.2'/%3E%3Cpath class='fg' d='M13.2 27.5c-3.2 0-5-2-5.4-5.2-.4-2.8.5-4.8 1.4-6.2L8 6.6C7.6 5.3 8.8 4 10.2 4.3c.9.2 1.5 1 1.7 1.9l1.8 7.3c.2.6.9.7 1.2.2l2.6-9.2c.4-1.3 1.9-1.8 3-.9.8.6 1.1 1.7.8 2.7l-2.2 8.7c1 .3 2.5 1.4 2.7 3.5.3 3.5-1.5 6-4.5 8.2-1.2.7-2.3 1-3.6 1z'/%3E%3Cpath class='cut' d='M8.8 18.2c.3-2 1.8-3.2 3.8-3.2h3.5c1.2 0 2.2.9 2.2 2.1 0 1.2-1 2.1-2.2 2.1h-3.8c-1.3 0-2.3.8-2.7 2' stroke-width='1.6'/%3E%3Cpath class='cut' d='M16 15.5c1.3-.2 2.7.2 3.1 1.5.3 1-.3 2-1.4 2.3' stroke-width='1.4'/%3E%3Cpath class='cut' d='M17.2 19.5c.8.3 1.8.8 1.9 1.8.1 1-.7 1.8-1.8 1.9' stroke-width='1.4'/%3E%3Cpath class='cut' d='M12.2 22.8c1.6.8 3.5.8 4.8.2' stroke-width='1.3'/%3E%3C/svg%3E",
       "sizes": "192x192 512x512",
       "type": "image/svg+xml",
       "purpose": "any maskable"

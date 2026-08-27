@@ -1,4 +1,5 @@
 /* Кастомні SVG-іконки Viche — stroke: currentColor */
+
 type P = { className?: string };
 const S = ({ className, children, filled = false }: P & { children: React.ReactNode; filled?: boolean }) => (
   <svg
@@ -16,10 +17,90 @@ const S = ({ className, children, filled = false }: P & { children: React.ReactN
 );
 
 export const LogoMark = ({ className }: P) => (
-  <svg className={className ?? "w-8 h-8"} viewBox="0 0 32 32" aria-hidden>
-    <rect width="32" height="32" rx="8" fill="var(--c-raise)" stroke="var(--c-line2)" />
-    <path d="M8 8.5 16 24l8-15.5" fill="none" stroke="var(--c-amber)" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" />
-    <circle cx="16" cy="25" r="2.1" fill="var(--c-mint)" />
+  <svg
+    className={className ?? "w-8 h-8"}
+    viewBox="0 0 32 32"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    aria-hidden
+  >
+    <rect
+      width="32"
+      height="32"
+      rx="8"
+      className="fill-[var(--c-raise)] stroke-[var(--c-line2)] transition-colors duration-300"
+      strokeWidth="1.2"
+    />
+    {/* Realistic Hand Victory Silhouette (Monochrome with negative cuts) */}
+    <g className="transition-colors duration-300">
+      <path
+        d="M13.2 27.5c-3.2 0-5-2-5.4-5.2-.4-2.8.5-4.8 1.4-6.2L8 6.6C7.6 5.3 8.8 4 10.2 4.3c.9.2 1.5 1 1.7 1.9l1.8 7.3c.2.6.9.7 1.2.2l2.6-9.2c.4-1.3 1.9-1.8 3-.9.8.6 1.1 1.7.8 2.7l-2.2 8.7c1 .3 2.5 1.4 2.7 3.5.3 3.5-1.5 6-4.5 8.2-1.2.7-2.3 1-3.6 1z"
+        className="fill-[var(--c-text)]"
+      />
+      {/* Thumb crossing over curled fingers */}
+      <path
+        d="M8.8 18.2c.3-2 1.8-3.2 3.8-3.2h3.5c1.2 0 2.2.9 2.2 2.1 0 1.2-1 2.1-2.2 2.1h-3.8c-1.3 0-2.3.8-2.7 2"
+        className="stroke-[var(--c-raise)]"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {/* Curled ring finger contour */}
+      <path
+        d="M16 15.5c1.3-.2 2.7.2 3.1 1.5.3 1-.3 2-1.4 2.3"
+        className="stroke-[var(--c-raise)]"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+      {/* Curled pinky finger contour */}
+      <path
+        d="M17.2 19.5c.8.3 1.8.8 1.9 1.8.1 1-.7 1.8-1.8 1.9"
+        className="stroke-[var(--c-raise)]"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+      {/* Palm crease line */}
+      <path
+        d="M12.2 22.8c1.6.8 3.5.8 4.8.2"
+        className="stroke-[var(--c-raise)]"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </g>
+  </svg>
+);
+
+export const IconVictory = ({ className }: P) => (
+  <svg
+    className={className ?? "w-4 h-4"}
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    aria-hidden
+  >
+    <path
+      d="M10 20.8c-2.4 0-3.8-1.5-4.1-3.9-.3-2.1.4-3.6 1.1-4.7L6 5c-.3-1 .6-2 1.7-1.8.7.2 1.1.8 1.3 1.4l1.4 5.5c.2.5.7.5.9.1l2-6.9c.3-1 1.4-1.4 2.3-.7.6.5.8 1.3.6 2l-1.7 6.5c.8.2 1.9 1.1 2 2.6.2 2.6-1.1 4.5-3.4 6.2-.9.5-1.7.8-2.6.8z"
+      fill="currentColor"
+    />
+    <path
+      d="M6.6 13.8c.2-1.5 1.4-2.4 2.9-2.4h2.6c.9 0 1.7.7 1.7 1.6 0 .9-.8 1.6-1.7 1.6H9.5c-1 0-1.7.6-2 1.5"
+      stroke="var(--c-raise, #0D1712)"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M12 11.8c1-.2 2.1.2 2.4 1.2.2.8-.2 1.5-1.1 1.7"
+      stroke="var(--c-raise, #0D1712)"
+      strokeWidth="1.1"
+      strokeLinecap="round"
+    />
+    <path
+      d="M13 14.8c.6.2 1.4.6 1.5 1.4.1.8-.5 1.4-1.4 1.5"
+      stroke="var(--c-raise, #0D1712)"
+      strokeWidth="1.1"
+      strokeLinecap="round"
+    />
   </svg>
 );
 export const IconShuffle = ({ className }: P) => (
