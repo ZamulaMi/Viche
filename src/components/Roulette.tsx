@@ -42,6 +42,7 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
   const [ice, setIce] = useState("");
   const [orient, setOrient] = useState<"land" | "port">(detectUserOrient);
   const [peerMicOn, setPeerMicOn] = useState(true);
+  const [peerCamOn, setPeerCamOn] = useState(true);
   const [slot, setSlot] = useState(-1);
 
   const netRef = useRef<RouletteNet | null>(null);
@@ -136,6 +137,10 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
           if (!liveRef.current) return;
           setPeerMicOn(on);
         },
+        onPeerCam: (on) => {
+          if (!liveRef.current) return;
+          setPeerCamOn(on);
+        },
         onPair: (stream, peerId) => {
           if (!liveRef.current) return;
           const tail = peerId.replace(/[^0-9a-zA-Z]/g, "").slice(-4) || shortId(4);
@@ -157,6 +162,7 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
           setPeer(null);
           setRemoteStream(null);
           setPeerMicOn(true);
+          setPeerCamOn(true);
           setIce("");
           setElapsed(0);
           toastRef.current(tRef.current("toast.peerLeft"), "warn");
@@ -175,6 +181,7 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
       setPeer(null);
       setRemoteStream(null);
       setPeerMicOn(true);
+      setPeerCamOn(true);
       setElapsed(0);
       const curOrient = detectUserOrient();
       setOrient(curOrient);
@@ -209,6 +216,7 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
     setPeer(null);
     setRemoteStream(null);
     setPeerMicOn(true);
+    setPeerCamOn(true);
     setElapsed(0);
     setOrient("land");
     setIce("");
@@ -223,6 +231,7 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
     setPeer(null);
     setRemoteStream(null);
     setPeerMicOn(true);
+    setPeerCamOn(true);
     setElapsed(0);
     setIce("");
     setPhase("searching");
@@ -270,6 +279,10 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
                 peerMicOn={peerMicOn}
                 onMicToggle={(on) => {
                   netRef.current?.sendMic(on);
+                }}
+                peerCamOn={peerCamOn}
+                onCamToggle={(on) => {
+                  netRef.current?.sendCam(on);
                 }}
                 onOrient={(o) => {
                   setOrient(o);

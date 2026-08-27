@@ -34,15 +34,17 @@ export type RouletteHooks = {
   onIce?: (info: string) => void;
   onOrientChange?: (orient: "land" | "port") => void;
   onPeerMic?: (on: boolean) => void;
+  onPeerCam?: (on: boolean) => void;
 };
 
 type Wire =
-  | { t: "knock"; from: string; f: RouletteFilters; u: string; orient?: "land" | "port"; mic?: boolean }
-  | { t: "accept"; from: string; u: string; orient?: "land" | "port"; mic?: boolean }
+  | { t: "knock"; from: string; f: RouletteFilters; u: string; orient?: "land" | "port"; mic?: boolean; cam?: boolean }
+  | { t: "accept"; from: string; u: string; orient?: "land" | "port"; mic?: boolean; cam?: boolean }
   | { t: "busy" }
-  | { t: "chello"; from: string; orient?: "land" | "port"; mic?: boolean }
+  | { t: "chello"; from: string; orient?: "land" | "port"; mic?: boolean; cam?: boolean }
   | { t: "orient"; orient: "land" | "port" }
   | { t: "mic"; on: boolean }
+  | { t: "cam"; on: boolean }
   | { t: "chat"; text: string }
   | { t: "bye" };
 
@@ -89,6 +91,7 @@ export class RouletteNet {
   private myFilters: RouletteFilters = { gender: "any", lang: "any", tags: [] };
   private myOrient: "land" | "port" = "land";
   private myMic = true;
+  private myCam = true;
 
   private partnerId: string | null = null;
   private chatConn: DataConnection | null = null;
@@ -157,6 +160,17 @@ export class RouletteNet {
     if (this.chatConn && this.chatConn.open) {
       try {
         this.chatConn.send({ t: "mic", on } satisfies Wire);
+      } catch {
+        /* noop */
+      }
+    }
+  }
+
+  public sendCam(on: boolean) {
+    this.myCam = on;
+    if (this.chatConn && this.chatConn.open) {
+      try {
+        this.chatConn.send({ t: "cam", on } satisfies Wire);
       } catch {
         /* noop */
       }
@@ -473,6 +487,9 @@ export class RouletteNet {
       if (typeof msg.mic === "boolean") {
         this.hooks.onPeerMic?.(msg.mic);
       }
+      if (typeof msg.cam === "boolean") {
+        this.hooks.onPeerCam?.(msg.cam);
+      }
 
       // Приймаємо парування
       try {
@@ -482,6 +499,7 @@ export class RouletteNet {
           u: this.uid,
           orient: this.myOrient,
           mic: this.myMic,
+          cam: this.myCam,
         } satisfies Wire);
       } catch {
         /* noop */
@@ -577,6 +595,7 @@ export class RouletteNet {
           f: this.myFilters,
           orient: this.myOrient,
           mic: this.myMic,
+          cam: this.myCam,
         } satisfies Wire);
       } catch {
         cleanup();
@@ -596,6 +615,9 @@ export class RouletteNet {
         }
         if (typeof msg.mic === "boolean") {
           this.hooks.onPeerMic?.(msg.mic);
+        }
+        if (typeof msg.cam === "boolean") {
+          this.hooks.onPeerCam?.(msg.cam);
         }
         const partnerDirectId = msg.from;
         if (partnerDirectId) {
@@ -656,9 +678,10 @@ export class RouletteNet {
         this.chatConn = c;
         c.on("open", () => {
           try {
-            c.send({ t: "chello", from: this.myPeerId, orient: this.myOrient, mic: this.myMic } satisfies Wire);
+            c.send({ t: "chello", from: this.myPeerId, orient: this.myOrient, mic: this.myMic, cam: this.myCam } satisfies Wire);
             c.send({ t: "orient", orient: this.myOrient } satisfies Wire);
             c.send({ t: "mic", on: this.myMic } satisfies Wire);
+            c.send({ t: "cam", on: this.myCam } satisfies Wire);
           } catch {
             /* noop */
           }
@@ -729,6 +752,8 @@ export class RouletteNet {
         this.hooks.onOrientChange?.(m.orient);
       } else if (m.t === "mic" && typeof m.on === "boolean") {
         this.hooks.onPeerMic?.(m.on);
+      } else if (m.t === "cam" && typeof m.on === "boolean") {
+        this.hooks.onPeerCam?.(m.on);
       } else if (m.t === "chello") {
         if (m.orient) {
           this.hooks.onOrientChange?.(m.orient);
@@ -736,9 +761,13 @@ export class RouletteNet {
         if (typeof m.mic === "boolean") {
           this.hooks.onPeerMic?.(m.mic);
         }
+        if (typeof m.cam === "boolean") {
+          this.hooks.onPeerCam?.(m.cam);
+        }
         try {
           c.send({ t: "orient", orient: this.myOrient } satisfies Wire);
           c.send({ t: "mic", on: this.myMic } satisfies Wire);
+          c.send({ t: "cam", on: this.myCam } satisfies Wire);
         } catch {
           /* noop */
         }

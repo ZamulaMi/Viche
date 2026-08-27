@@ -88,6 +88,7 @@ function Tile({
   badgeTone = "mint",
   muted,
   micOn,
+  camOn,
   live,
   isSelf,
   facingMode = "user",
@@ -104,6 +105,7 @@ function Tile({
   badgeTone?: "mint" | "amber" | "faint";
   muted?: boolean;
   micOn?: boolean;
+  camOn?: boolean;
   /** пульсуючий live-індикатор у бейджі (рельатрансляція) */
   live?: boolean;
   isSelf?: boolean;
@@ -118,6 +120,7 @@ function Tile({
   const ref = useRef<HTMLVideoElement>(null);
   const [port, setPort] = useState(false);
   const [trackMuted, setTrackMuted] = useState(false);
+  const [videoTrackMuted, setVideoTrackMuted] = useState(false);
 
   useEffect(() => {
     const audio = stream?.getAudioTracks?.()[0];
@@ -135,6 +138,25 @@ function Tile({
       audio.removeEventListener("mute", onM);
       audio.removeEventListener("unmute", onU);
       audio.removeEventListener("ended", onM);
+    };
+  }, [stream]);
+
+  useEffect(() => {
+    const video = stream?.getVideoTracks?.()[0];
+    if (!video) {
+      setVideoTrackMuted(false);
+      return;
+    }
+    setVideoTrackMuted(!video.enabled || video.muted);
+    const onM = () => setVideoTrackMuted(true);
+    const onU = () => setVideoTrackMuted(false);
+    video.addEventListener("mute", onM);
+    video.addEventListener("unmute", onU);
+    video.addEventListener("ended", onM);
+    return () => {
+      video.removeEventListener("mute", onM);
+      video.removeEventListener("unmute", onU);
+      video.removeEventListener("ended", onM);
     };
   }, [stream]);
 
@@ -160,6 +182,7 @@ function Tile({
         : "text-[var(--c-faint)] border-[var(--c-line2)]";
 
   const effectiveMicOn = typeof micOn === "boolean" ? micOn : !trackMuted;
+  const effectiveCamOn = typeof camOn === "boolean" ? camOn : !videoTrackMuted;
 
   return (
     <div
@@ -180,22 +203,43 @@ function Tile({
           isSelf && facingMode !== "environment" ? "-scale-x-100" : "scale-x-100"
         }`}
       />
+      {!effectiveCamOn && (
+        <div className="absolute inset-0 bg-[var(--c-bg)] grid place-items-center z-[5]">
+          <IconCamOff className="w-7 h-7 sm:w-9 sm:h-9 text-[var(--c-faint)]" />
+        </div>
+      )}
       <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 px-2.5 sm:px-3 py-1.5 sm:py-2 bg-gradient-to-t from-black/80 via-black/40 to-transparent z-10 pointer-events-none">
-        <span className="text-[12.5px] sm:text-[13px] font-700 text-white truncate max-w-[calc(100%-32px)]">{name}</span>
-        <span
-          className={`inline-flex items-center justify-center p-1 rounded-md border backdrop-blur-sm ${
-            effectiveMicOn
-              ? "text-emerald-400 border-emerald-500/40 bg-emerald-950/60 shadow-[0_0_8px_rgba(52,211,153,0.3)]"
-              : "text-rose-400 border-rose-500/40 bg-rose-950/60 shadow-[0_0_8px_rgba(244,63,94,0.3)]"
-          }`}
-          title={effectiveMicOn ? "Мікрофон увімкнено" : "Мікрофон вимкнено"}
-        >
-          {effectiveMicOn ? (
-            <IconMic className="w-3.5 h-3.5 text-emerald-400" />
-          ) : (
-            <IconMicOff className="w-3.5 h-3.5 text-rose-400" />
-          )}
-        </span>
+        <span className="text-[12.5px] sm:text-[13px] font-700 text-white truncate max-w-[calc(100%-70px)]">{name}</span>
+        <div className="flex items-center gap-1.5 flex-none">
+          <span
+            className={`inline-flex items-center justify-center p-1 rounded-md border backdrop-blur-sm ${
+              effectiveMicOn
+                ? "text-emerald-400 border-emerald-500/40 bg-emerald-950/60 shadow-[0_0_8px_rgba(52,211,153,0.3)]"
+                : "text-rose-400 border-rose-500/40 bg-rose-950/60 shadow-[0_0_8px_rgba(244,63,94,0.3)]"
+            }`}
+            title={effectiveMicOn ? "Мікрофон увімкнено" : "Мікрофон вимкнено"}
+          >
+            {effectiveMicOn ? (
+              <IconMic className="w-3.5 h-3.5 text-emerald-400" />
+            ) : (
+              <IconMicOff className="w-3.5 h-3.5 text-rose-400" />
+            )}
+          </span>
+          <span
+            className={`inline-flex items-center justify-center p-1 rounded-md border backdrop-blur-sm ${
+              effectiveCamOn
+                ? "text-emerald-400 border-emerald-500/40 bg-emerald-950/60 shadow-[0_0_8px_rgba(52,211,153,0.3)]"
+                : "text-rose-400 border-rose-500/40 bg-rose-950/60 shadow-[0_0_8px_rgba(244,63,94,0.3)]"
+            }`}
+            title={effectiveCamOn ? "Камера увімкнена" : "Камера вимкнена"}
+          >
+            {effectiveCamOn ? (
+              <IconCam className="w-3.5 h-3.5 text-emerald-400" />
+            ) : (
+              <IconCamOff className="w-3.5 h-3.5 text-rose-400" />
+            )}
+          </span>
+        </div>
       </div>
       {badge && (
         <span className={`absolute top-2 left-2 font-mono text-[10px] px-2 py-0.5 rounded-md border bg-black/55 backdrop-blur-sm flex items-center gap-1.5 z-10 ${tone}`}>
@@ -295,6 +339,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   const [micOn, setMicOn] = useState(true);
   const [peerMics, setPeerMics] = useState<Record<string, boolean>>({});
   const [camOn, setCamOn] = useState(true);
+  const [peerCams, setPeerCams] = useState<Record<string, boolean>>({});
   const [facingMode, setFacingMode] = useState<FacingMode>(localMedia?.facingMode ?? "user");
   const [selfStream, setSelfStream] = useState<MediaStream | null>(localMedia?.stream ?? null);
   const [switchingCam, setSwitchingCam] = useState(false);
@@ -371,9 +416,11 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   };
   const toggleCam = () => {
     setCamOn((v) => {
+      const next = !v;
       const s = selfStream || localMedia?.stream;
-      s?.getVideoTracks().forEach((tr) => (tr.enabled = v ? false : true));
-      return !v;
+      s?.getVideoTracks().forEach((tr) => (tr.enabled = next));
+      netRef.current?.sendCam(next);
+      return next;
     });
   };
 
@@ -487,6 +534,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
     setStreams({});
     setAuxStreams({});
     setPeerMics({});
+    setPeerCams({});
     setMsgs([]);
     setSearching(false);
     // після виходу з кімнати камера/мікрофон вимикаються повністю
@@ -508,6 +556,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
         setStreams({});
         setAuxStreams({});
         setPeerMics({});
+        setPeerCams({});
         saveRecent(r);
         setRecents(loadRecent());
         const net = new RoomNet(
@@ -541,6 +590,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
             onRoster: (members) => aliveRef.current && setRoster(members),
             onPeerStream: (pid, s) => aliveRef.current && setStreams((st) => ({ ...st, [pid]: s })),
             onPeerMic: (pid, on) => aliveRef.current && setPeerMics((m) => ({ ...m, [pid]: on })),
+            onPeerCam: (pid, on) => aliveRef.current && setPeerCams((m) => ({ ...m, [pid]: on })),
             onPeerGone: (pid) =>
               aliveRef.current &&
               (setStreams((st) => {
@@ -549,6 +599,11 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
                 return cp;
               }),
               setPeerMics((m) => {
+                const cp = { ...m };
+                delete cp[pid];
+                return cp;
+              }),
+              setPeerCams((m) => {
                 const cp = { ...m };
                 delete cp[pid];
                 return cp;
@@ -849,14 +904,16 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
               {micOn ? <IconMic className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-emerald-400" /> : <IconMicOff className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-rose-400" />}
             </button>
             <button
-              className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[40px] sm:min-w-[40px] !p-2 ${
-                !camOn ? "!text-[var(--c-red)] !border-[color-mix(in_srgb,var(--c-red)_50%,transparent)]" : ""
+              className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[40px] sm:min-w-[40px] !p-2 transition-all ${
+                camOn
+                  ? "!text-emerald-400 !border-emerald-500/40 bg-emerald-950/40 hover:bg-emerald-950/60 shadow-[0_0_10px_rgba(52,211,153,0.2)]"
+                  : "!text-rose-400 !border-rose-500/50 bg-rose-950/40 hover:bg-rose-950/60 shadow-[0_0_10px_rgba(244,63,94,0.2)]"
               }`}
               onClick={toggleCam}
               title={t("video.cam")}
               aria-label={t("video.cam")}
             >
-              {camOn ? <IconCam className="w-4 h-4 sm:w-4.5 sm:h-4.5" /> : <IconCamOff className="w-4 h-4 sm:w-4.5 sm:h-4.5" />}
+              {camOn ? <IconCam className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-emerald-400" /> : <IconCamOff className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-rose-400" />}
             </button>
             <button
               className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[40px] sm:min-w-[40px] !py-2 !px-2.5 sm:!px-3 ${
@@ -915,6 +972,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
                     const self = netRef.current?.myId === m.id;
                     const st = self ? (selfStream || localMedia?.stream) : streams[m.id];
                     const memberMic = self ? micOn : (peerMics[m.id] !== undefined ? peerMics[m.id] : undefined);
+                    const memberCam = self ? camOn : (peerCams[m.id] !== undefined ? peerCams[m.id] : undefined);
                     return st ? (
                       <Tile
                         key={m.id}
@@ -924,6 +982,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
                         badgeTone={self ? "amber" : "mint"}
                         muted={self}
                         micOn={memberMic}
+                        camOn={memberCam}
                         isSelf={self}
                         facingMode={self ? facingMode : "user"}
                         onSwitchCam={self && localMedia?.hasCam ? handleSwitchCam : undefined}

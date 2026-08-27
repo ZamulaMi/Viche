@@ -30,6 +30,8 @@ type Props = {
   onOrient?: (o: "land" | "port") => void;
   peerMicOn?: boolean;
   onMicToggle?: (on: boolean) => void;
+  peerCamOn?: boolean;
+  onCamToggle?: (on: boolean) => void;
   /** реальний текстовий чат (лише для мережевої пари) */
   chat?: { send: (text: string) => void; subscribe: (fn: (text: string) => void) => () => void };
   localMedia: LocalMedia | null;
@@ -48,6 +50,8 @@ export default function VideoChat({
   onOrient,
   peerMicOn,
   onMicToggle,
+  peerCamOn,
+  onCamToggle,
   chat,
   localMedia,
   onStreamUpdate,
@@ -69,6 +73,7 @@ export default function VideoChat({
   const [camOn, setCamOn] = useState(true);
   const [speaking, setSpeaking] = useState(false);
   const [remoteTrackMuted, setRemoteTrackMuted] = useState(false);
+  const [remoteVideoTrackMuted, setRemoteVideoTrackMuted] = useState(false);
   const [cool, setCool] = useState(false);
   const [isFull, setIsFull] = useState(false);
   const [facingMode, setFacingMode] = useState<FacingMode>(localMedia?.facingMode ?? "user");
@@ -109,6 +114,27 @@ export default function VideoChat({
       audioTrack.removeEventListener("mute", onMute);
       audioTrack.removeEventListener("unmute", onUnmute);
       audioTrack.removeEventListener("ended", onMute);
+    };
+  }, [remoteStream]);
+
+  /* відстеження вимкнення відеотреку співрозмовника через WebRTC події */
+  useEffect(() => {
+    if (!remoteStream) return;
+    const videoTrack = remoteStream.getVideoTracks()[0];
+    if (!videoTrack) {
+      setRemoteVideoTrackMuted(false);
+      return;
+    }
+    setRemoteVideoTrackMuted(!videoTrack.enabled || videoTrack.muted);
+    const onMute = () => setRemoteVideoTrackMuted(true);
+    const onUnmute = () => setRemoteVideoTrackMuted(false);
+    videoTrack.addEventListener("mute", onMute);
+    videoTrack.addEventListener("unmute", onUnmute);
+    videoTrack.addEventListener("ended", onMute);
+    return () => {
+      videoTrack.removeEventListener("mute", onMute);
+      videoTrack.removeEventListener("unmute", onUnmute);
+      videoTrack.removeEventListener("ended", onMute);
     };
   }, [remoteStream]);
 
@@ -295,8 +321,10 @@ export default function VideoChat({
   };
   const toggleCam = () => {
     setCamOn((v) => {
-      localMedia?.stream.getVideoTracks().forEach((tr) => (tr.enabled = v ? false : true));
-      return !v;
+      const next = !v;
+      localMedia?.stream.getVideoTracks().forEach((tr) => (tr.enabled = next));
+      onCamToggle?.(next);
+      return next;
     });
   };
 
@@ -386,6 +414,7 @@ export default function VideoChat({
       {/* верхня панель: статус + пір */}
       {(() => {
         const effectivePeerMic = peerMicOn !== undefined ? peerMicOn : !remoteTrackMuted;
+        const effectivePeerCam = peerCamOn !== undefined ? peerCamOn : !remoteVideoTrackMuted;
         return (
           <div className={`absolute top-2 sm:top-3 left-2 sm:left-3 right-2 sm:right-3 ${isFull ? "pt-[env(safe-area-inset-top,10px)]" : "pt-[env(safe-area-inset-top,0px)]"} flex items-start justify-between gap-2 z-20 pointer-events-none`}>
             <div className="flex items-center gap-2 sm:gap-2.5 rounded-xl bg-[color-mix(in_srgb,var(--c-bg)_76%,transparent)] backdrop-blur-md border border-[var(--c-line)] px-2.5 sm:px-3.5 py-1.5 sm:py-2 pointer-events-auto shadow-sm">
@@ -393,7 +422,7 @@ export default function VideoChat({
               <div className="leading-tight">
                 <p className="font-mono text-[9px] sm:text-[10px] tracking-[0.18em] text-[var(--c-mint)]">{t("state.live")}</p>
                 <div className="flex items-center gap-1.5 sm:gap-2">
-                  <p className="text-xs sm:text-sm font-700 text-[var(--c-text)] truncate max-w-[120px] sm:max-w-[180px]">
+                  <p className="text-xs sm:text-sm font-700 text-[var(--c-text)] truncate max-w-[110px] sm:max-w-[170px]">
                     {peer.name}
                     {!peer.real && <span className="font-mono text-[10px] sm:text-[11px] text-[var(--c-dim)]"> · {peer.ping}ms</span>}
                     {peer.real && <span className="font-mono text-[10px] sm:text-[11px] text-[var(--c-mint)]"> · p2p</span>}
@@ -410,6 +439,20 @@ export default function VideoChat({
                       <IconMic className="w-3.5 h-3.5 text-emerald-400" />
                     ) : (
                       <IconMicOff className="w-3.5 h-3.5 text-rose-400" />
+                    )}
+                  </span>
+                  <span
+                    className={`inline-flex items-center justify-center p-1 rounded-md border backdrop-blur-sm ${
+                      effectivePeerCam
+                        ? "text-emerald-400 border-emerald-500/40 bg-emerald-950/60 shadow-[0_0_8px_rgba(52,211,153,0.25)]"
+                        : "text-rose-400 border-rose-500/40 bg-rose-950/60 shadow-[0_0_8px_rgba(244,63,94,0.25)]"
+                    }`}
+                    title={effectivePeerCam ? "Камера співрозмовника увімкнена" : "Камера співрозмовника вимкнена"}
+                  >
+                    {effectivePeerCam ? (
+                      <IconCam className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : (
+                      <IconCamOff className="w-3.5 h-3.5 text-rose-400" />
                     )}
                   </span>
                 </div>
@@ -486,6 +529,16 @@ export default function VideoChat({
             title={micOn ? "Ваш мікрофон увімкнено" : "Ваш мікрофон вимкнено"}
           >
             {micOn ? <IconMic className="w-2.5 h-2.5 text-emerald-400" /> : <IconMicOff className="w-2.5 h-2.5 text-rose-400" />}
+          </span>
+          <span
+            className={`inline-flex items-center justify-center p-0.5 rounded border backdrop-blur-sm ${
+              camOn
+                ? "text-emerald-400 border-emerald-500/40 bg-emerald-950/60"
+                : "text-rose-400 border-rose-500/40 bg-rose-950/60"
+            }`}
+            title={camOn ? "Ваша камера увімкнена" : "Ваша камера вимкнена"}
+          >
+            {camOn ? <IconCam className="w-2.5 h-2.5 text-emerald-400" /> : <IconCamOff className="w-2.5 h-2.5 text-rose-400" />}
           </span>
           {localMedia?.hasCam && (
             <span className="font-mono text-[8px] sm:text-[9px] px-1 py-0.2 rounded bg-black/60 text-[var(--c-faint)] uppercase">
@@ -578,12 +631,16 @@ export default function VideoChat({
             {micOn ? <IconMic className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400" /> : <IconMicOff className="w-4 h-4 sm:w-5 sm:h-5 text-rose-400" />}
           </button>
           <button
-            className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none ${!camOn ? "!text-[var(--c-red)] !border-[color-mix(in_srgb,var(--c-red)_50%,transparent)]" : ""}`}
+            className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none transition-all ${
+              camOn
+                ? "!text-emerald-400 !border-emerald-500/40 bg-emerald-950/40 hover:bg-emerald-950/60"
+                : "!text-rose-400 !border-rose-500/50 bg-rose-950/40 hover:bg-rose-950/60"
+            }`}
             onClick={toggleCam}
             title={t("video.cam")}
             aria-label={t("video.cam")}
           >
-            {camOn ? <IconCam className="w-4 h-4 sm:w-5 sm:h-5" /> : <IconCamOff className="w-4 h-4 sm:w-5 sm:h-5" />}
+            {camOn ? <IconCam className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400" /> : <IconCamOff className="w-4 h-4 sm:w-5 sm:h-5 text-rose-400" />}
           </button>
           <button
             className="btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none relative"

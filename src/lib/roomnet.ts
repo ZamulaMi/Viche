@@ -30,6 +30,7 @@ type RMsg =
   | { type: "roster"; members: Member[] }
   | { type: "chat"; from: string; name: string; text: string }
   | { type: "mic"; from: string; on: boolean }
+  | { type: "cam"; from: string; on: boolean }
   | { type: "kick" }
   | { type: "poke" } // «ти мав мені подзвонити» — прискорює mesh
   | { type: "aux-list"; list: Array<{ id: string; name: string }> }
@@ -44,6 +45,7 @@ export type RoomHooks = {
   onPeerGone: (peerId: string) => void;
   onChat: (fromId: string, name: string, text: string) => void;
   onPeerMic?: (peerId: string, on: boolean) => void;
+  onPeerCam?: (peerId: string, on: boolean) => void;
   onKicked: () => void;
   /** зведення ICE-шляхів mesh-з'єднань: "relay ×2 · lan" тощо */
   onIceInfo?: (info: string) => void;
@@ -369,6 +371,8 @@ export class RoomNet {
         this.hooks.onAuxGone?.(m.id);
       } else if (m.type === "mic") {
         this.hooks.onPeerMic?.(m.from, m.on);
+      } else if (m.type === "cam") {
+        this.hooks.onPeerCam?.(m.from, m.on);
       } else if (m.type === "chat") {
         this.hooks.onChat(m.from, m.name, m.text);
       } else if (m.type === "kick") {
@@ -701,6 +705,21 @@ export class RoomNet {
     const myId = this.myId;
     if (!myId) return;
     const msg: RMsg = { type: "mic", from: myId, on };
+    this.conns.forEach((c) => {
+      if (c.open) {
+        try {
+          c.send(msg);
+        } catch {
+          /* noop */
+        }
+      }
+    });
+  }
+
+  sendCam(on: boolean) {
+    const myId = this.myId;
+    if (!myId) return;
+    const msg: RMsg = { type: "cam", from: myId, on };
     this.conns.forEach((c) => {
       if (c.open) {
         try {
