@@ -308,10 +308,16 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
 
   // Оновлюємо композитор у реальному часі при зміні учасників, потоків або орієнтації гостя рулетки
   useEffect(() => {
+    const isPort = guestOrient ? guestOrient === "port" : isPortrait;
     if (compositorRef.current) {
-      const isPort = guestOrient ? guestOrient === "port" : isPortrait;
+      compositorRef.current.setPortrait(isPort);
       compositorRef.current.updateSources(currentSources, isPort);
     }
+    const currentOrient = isPortrait ? "port" : "land";
+    for (const h of huntersRef.current) {
+      h.net?.sendOrientation(currentOrient);
+    }
+    pendingHunter.current?.sendOrientation(currentOrient);
   }, [currentSources, isPortrait, guestOrient]);
 
   const toggleMic = () => {

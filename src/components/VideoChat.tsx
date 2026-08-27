@@ -5,7 +5,6 @@ import type { FacingMode, LocalMedia } from "../lib/rtc";
 import { enterFullscreen, exitFullscreen, isNativeFullscreen } from "../lib/fullscreen";
 import { useI18n } from "../i18n";
 import {
-  IconAspect,
   IconCam,
   IconCamOff,
   IconChat,
@@ -67,7 +66,6 @@ export default function VideoChat({
   const [speaking, setSpeaking] = useState(false);
   const [cool, setCool] = useState(false);
   const [isFull, setIsFull] = useState(false);
-  const [videoFit, setVideoFit] = useState<"contain" | "cover">("contain");
   const [facingMode, setFacingMode] = useState<FacingMode>(localMedia?.facingMode ?? "user");
   const [switchingCam, setSwitchingCam] = useState(false);
 
@@ -341,9 +339,19 @@ export default function VideoChat({
             onOrient?.(v.videoWidth < v.videoHeight ? "port" : "land");
           }
         }}
-        className={`absolute inset-0 w-full h-full ${
-          videoFit === "cover" ? "object-cover" : "object-contain"
-        } bg-black transition-all duration-200`}
+        onResize={(e) => {
+          const v = e.currentTarget;
+          if (v.videoWidth > 0 && v.videoHeight > 0) {
+            onOrient?.(v.videoWidth < v.videoHeight ? "port" : "land");
+          }
+        }}
+        onPlaying={(e) => {
+          const v = e.currentTarget;
+          if (v.videoWidth > 0 && v.videoHeight > 0) {
+            onOrient?.(v.videoWidth < v.videoHeight ? "port" : "land");
+          }
+        }}
+        className="absolute inset-0 w-full h-full object-contain bg-black transition-all duration-150"
       />
 
       {/* верхня панель: статус + пір */}
@@ -515,22 +523,6 @@ export default function VideoChat({
                 {unread}
               </span>
             )}
-          </button>
-          <button
-            className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none inline-flex ${
-              videoFit === "cover"
-                ? "!text-[var(--c-mint)] !border-[color-mix(in_srgb,var(--c-mint)_50%,transparent)] bg-[color-mix(in_srgb,var(--c-mint)_15%,transparent)]"
-                : ""
-            }`}
-            onClick={() => {
-              const nextFit = videoFit === "contain" ? "cover" : "contain";
-              setVideoFit(nextFit);
-              onToast(nextFit === "cover" ? t("video.fitCover") : t("video.fitContain"), "ok");
-            }}
-            title={`${t("video.fit")} (${videoFit === "contain" ? t("video.fitContain") : t("video.fitCover")})`}
-            aria-label={t("video.fit")}
-          >
-            <IconAspect className="w-4 h-4 sm:w-5 sm:h-5" />
           </button>
           <button
             className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none inline-flex ${isFull ? "!text-[var(--c-amber)] !border-[color-mix(in_srgb,var(--c-amber)_50%,transparent)] bg-[color-mix(in_srgb,var(--c-amber)_15%,transparent)]" : ""}`}

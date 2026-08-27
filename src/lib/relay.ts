@@ -253,6 +253,7 @@ export class RoomStreamCompositor {
       this.canvas.width = targetW;
       this.canvas.height = targetH;
     }
+    this.draw();
   }
 
   updateSources(newSources: RoomSource[], isPortrait?: boolean) {
@@ -331,6 +332,8 @@ export class RoomStreamCompositor {
         this.audioSources.delete(id);
       }
     }
+
+    this.draw();
   }
 
   private startLoop() {
@@ -338,7 +341,7 @@ export class RoomStreamCompositor {
     const render = (ts: number) => {
       if (this.disposed) return;
       this.animId = requestAnimationFrame(render);
-      if (ts - last < 41) return; // ~24 FPS
+      if (ts - last < 28) return; // ~35 FPS для миттєвого оновлення
       last = ts;
       this.draw();
     };

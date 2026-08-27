@@ -68,9 +68,12 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
     };
     window.addEventListener("resize", handleResize);
     window.addEventListener("orientationchange", handleResize);
+    const mq = window.matchMedia?.("(orientation: portrait)");
+    mq?.addEventListener?.("change", handleResize);
     return () => {
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("orientationchange", handleResize);
+      mq?.removeEventListener?.("change", handleResize);
     };
   }, []);
 
@@ -124,6 +127,10 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
           else if (s === "idle") setPhase("idle");
         },
         onSlot: (sl) => setSlot(sl),
+        onOrientChange: (o) => {
+          if (!liveRef.current) return;
+          setOrient(o);
+        },
         onPair: (stream, peerId) => {
           if (!liveRef.current) return;
           const tail = peerId.replace(/[^0-9a-zA-Z]/g, "").slice(-4) || shortId(4);
@@ -238,7 +245,7 @@ export default function Roulette({ localMedia, ensureLocal, releaseMedia, onToas
         {/* ── Сцена: карточка сцени .card ── */}
         <div className="card overflow-hidden relative w-full">
           <div
-            className={`relative bg-[var(--c-bg2)] transition-all duration-300 w-full mx-auto overflow-hidden ${
+            className={`relative bg-[var(--c-bg2)] transition-all duration-150 ease-out w-full mx-auto overflow-hidden ${
               phase === "live"
                 ? orient === "port"
                   ? "aspect-[9/16] max-h-[min(82dvh,780px)] min-h-[380px] max-w-[460px]"
