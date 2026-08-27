@@ -246,14 +246,12 @@ export class RoomStreamCompositor {
 
   setPortrait(isPortrait: boolean) {
     if (this.disposed) return;
-    if (this.isPortrait !== isPortrait) {
-      this.isPortrait = isPortrait;
-      const targetW = isPortrait ? 720 : 1280;
-      const targetH = isPortrait ? 1280 : 720;
-      if (this.canvas.width !== targetW || this.canvas.height !== targetH) {
-        this.canvas.width = targetW;
-        this.canvas.height = targetH;
-      }
+    this.isPortrait = isPortrait;
+    const targetW = isPortrait ? 720 : 1280;
+    const targetH = isPortrait ? 1280 : 720;
+    if (this.canvas.width !== targetW || this.canvas.height !== targetH) {
+      this.canvas.width = targetW;
+      this.canvas.height = targetH;
     }
   }
 
@@ -394,7 +392,15 @@ export class RoomStreamCompositor {
       const v0 = this.videoEls.get(s0.id);
       const v1 = this.videoEls.get(s1.id);
 
-      if (this.isPortrait) {
+      const isPort =
+        this.isPortrait ||
+        W < H ||
+        (typeof window !== "undefined" &&
+          (window.innerHeight >= window.innerWidth ||
+            window.matchMedia?.("(orientation: portrait)")?.matches === true)) ||
+        (!!v0 && v0.videoHeight > v0.videoWidth && !!v1 && v1.videoHeight > v1.videoWidth);
+
+      if (isPort) {
         // Портретний режим: вертикальне розташування один над одним (50% зверху, 50% знизу)
         const halfH = H / 2;
 
