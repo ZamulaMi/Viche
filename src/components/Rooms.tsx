@@ -87,6 +87,7 @@ function Tile({
   badge,
   badgeTone = "mint",
   muted,
+  micOn,
   live,
   isSelf,
   facingMode = "user",
@@ -102,6 +103,7 @@ function Tile({
   badge?: string;
   badgeTone?: "mint" | "amber" | "faint";
   muted?: boolean;
+  micOn?: boolean;
   /** пульсуючий live-індикатор у бейджі (рельатрансляція) */
   live?: boolean;
   isSelf?: boolean;
@@ -115,6 +117,27 @@ function Tile({
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [port, setPort] = useState(false);
+  const [trackMuted, setTrackMuted] = useState(false);
+
+  useEffect(() => {
+    const audio = stream?.getAudioTracks?.()[0];
+    if (!audio) {
+      setTrackMuted(false);
+      return;
+    }
+    setTrackMuted(!audio.enabled || audio.muted);
+    const onM = () => setTrackMuted(true);
+    const onU = () => setTrackMuted(false);
+    audio.addEventListener("mute", onM);
+    audio.addEventListener("unmute", onU);
+    audio.addEventListener("ended", onM);
+    return () => {
+      audio.removeEventListener("mute", onM);
+      audio.removeEventListener("unmute", onU);
+      audio.removeEventListener("ended", onM);
+    };
+  }, [stream]);
+
   useEffect(() => {
     const v = ref.current;
     if (!v) return;
@@ -135,6 +158,9 @@ function Tile({
       : badgeTone === "amber"
         ? "text-[var(--c-amber)] border-[color-mix(in_srgb,var(--c-amber)_45%,transparent)]"
         : "text-[var(--c-faint)] border-[var(--c-line2)]";
+
+  const effectiveMicOn = typeof micOn === "boolean" ? micOn : !trackMuted;
+
   return (
     <div
       className={`group relative w-full ${
@@ -154,9 +180,22 @@ function Tile({
           isSelf && facingMode !== "environment" ? "-scale-x-100" : "scale-x-100"
         }`}
       />
-      <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 px-3 py-2 bg-gradient-to-t from-black/75 to-transparent z-10 pointer-events-none">
-        <span className="text-[13px] font-700 text-white truncate">{name}</span>
-        {muted && <IconMicOff className="w-3.5 h-3.5 text-white/70 flex-none" />}
+      <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 px-2.5 sm:px-3 py-1.5 sm:py-2 bg-gradient-to-t from-black/80 via-black/40 to-transparent z-10 pointer-events-none">
+        <span className="text-[12.5px] sm:text-[13px] font-700 text-white truncate max-w-[calc(100%-32px)]">{name}</span>
+        <span
+          className={`inline-flex items-center justify-center p-1 rounded-md border backdrop-blur-sm ${
+            effectiveMicOn
+              ? "text-emerald-400 border-emerald-500/40 bg-emerald-950/60 shadow-[0_0_8px_rgba(52,211,153,0.3)]"
+              : "text-rose-400 border-rose-500/40 bg-rose-950/60 shadow-[0_0_8px_rgba(244,63,94,0.3)]"
+          }`}
+          title={effectiveMicOn ? "Мікрофон увімкнено" : "Мікрофон вимкнено"}
+        >
+          {effectiveMicOn ? (
+            <IconMic className="w-3.5 h-3.5 text-emerald-400" />
+          ) : (
+            <IconMicOff className="w-3.5 h-3.5 text-rose-400" />
+          )}
+        </span>
       </div>
       {badge && (
         <span className={`absolute top-2 left-2 font-mono text-[10px] px-2 py-0.5 rounded-md border bg-black/55 backdrop-blur-sm flex items-center gap-1.5 z-10 ${tone}`}>
@@ -254,6 +293,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
   }, []);
 
   const [micOn, setMicOn] = useState(true);
+  const [peerMics, setPeerMics] = useState<Record<string, boolean>>({});
   const [camOn, setCamOn] = useState(true);
   const [facingMode, setFacingMode] = useState<FacingMode>(localMedia?.facingMode ?? "user");
   const [selfStream, setSelfStream] = useState<MediaStream | null>(localMedia?.stream ?? null);
@@ -322,9 +362,11 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
 
   const toggleMic = () => {
     setMicOn((v) => {
+      const next = !v;
       const s = selfStream || localMedia?.stream;
-      s?.getAudioTracks().forEach((tr) => (tr.enabled = v ? false : true));
-      return !v;
+      s?.getAudioTracks().forEach((tr) => (tr.enabled = next));
+      netRef.current?.sendMic(next);
+      return next;
     });
   };
   const toggleCam = () => {
@@ -444,6 +486,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
     prevRoster.current = [];
     setStreams({});
     setAuxStreams({});
+    setPeerMics({});
     setMsgs([]);
     setSearching(false);
     // після виходу з кімнати камера/мікрофон вимикаються повністю
@@ -464,6 +507,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
         setRoster([]);
         setStreams({});
         setAuxStreams({});
+        setPeerMics({});
         saveRecent(r);
         setRecents(loadRecent());
         const net = new RoomNet(
@@ -496,13 +540,19 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
             },
             onRoster: (members) => aliveRef.current && setRoster(members),
             onPeerStream: (pid, s) => aliveRef.current && setStreams((st) => ({ ...st, [pid]: s })),
+            onPeerMic: (pid, on) => aliveRef.current && setPeerMics((m) => ({ ...m, [pid]: on })),
             onPeerGone: (pid) =>
               aliveRef.current &&
-              setStreams((st) => {
+              (setStreams((st) => {
                 const cp = { ...st };
                 delete cp[pid];
                 return cp;
               }),
+              setPeerMics((m) => {
+                const cp = { ...m };
+                delete cp[pid];
+                return cp;
+              })),
             onChat: (_from, fromName, text) => {
               if (!aliveRef.current) return;
               const { text: clean, flagged } = filterProfanity(text);
@@ -787,14 +837,16 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
           )}
           <div className="ml-auto flex flex-wrap items-center gap-1.5 sm:gap-2">
             <button
-              className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[40px] sm:min-w-[40px] !p-2 ${
-                !micOn ? "!text-[var(--c-red)] !border-[color-mix(in_srgb,var(--c-red)_50%,transparent)]" : ""
+              className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[40px] sm:min-w-[40px] !p-2 transition-all ${
+                micOn
+                  ? "!text-emerald-400 !border-emerald-500/40 bg-emerald-950/40 hover:bg-emerald-950/60 shadow-[0_0_10px_rgba(52,211,153,0.2)]"
+                  : "!text-rose-400 !border-rose-500/50 bg-rose-950/40 hover:bg-rose-950/60 shadow-[0_0_10px_rgba(244,63,94,0.2)]"
               }`}
               onClick={toggleMic}
               title={t("video.mic")}
               aria-label={t("video.mic")}
             >
-              {micOn ? <IconMic className="w-4 h-4 sm:w-4.5 sm:h-4.5" /> : <IconMicOff className="w-4 h-4 sm:w-4.5 sm:h-4.5" />}
+              {micOn ? <IconMic className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-emerald-400" /> : <IconMicOff className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-rose-400" />}
             </button>
             <button
               className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[40px] sm:min-w-[40px] !p-2 ${
@@ -862,6 +914,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
                   {roster.map((m) => {
                     const self = netRef.current?.myId === m.id;
                     const st = self ? (selfStream || localMedia?.stream) : streams[m.id];
+                    const memberMic = self ? micOn : (peerMics[m.id] !== undefined ? peerMics[m.id] : undefined);
                     return st ? (
                       <Tile
                         key={m.id}
@@ -870,6 +923,7 @@ export default function Rooms({ localMedia, ensureLocal, releaseMedia, onToast, 
                         badge={self ? t("room.you") : m.id === netRef.current?.hostId ? t("room.admin") : "p2p"}
                         badgeTone={self ? "amber" : "mint"}
                         muted={self}
+                        micOn={memberMic}
                         isSelf={self}
                         facingMode={self ? facingMode : "user"}
                         onSwitchCam={self && localMedia?.hasCam ? handleSwitchCam : undefined}

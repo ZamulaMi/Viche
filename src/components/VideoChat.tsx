@@ -28,6 +28,8 @@ type Props = {
   setRemoteSpeaking: (b: boolean) => void;
   /** орієнтація відео партнера: 4:3 горизонталь / 3:4 вертикаль */
   onOrient?: (o: "land" | "port") => void;
+  peerMicOn?: boolean;
+  onMicToggle?: (on: boolean) => void;
   /** реальний текстовий чат (лише для мережевої пари) */
   chat?: { send: (text: string) => void; subscribe: (fn: (text: string) => void) => () => void };
   localMedia: LocalMedia | null;
@@ -44,6 +46,8 @@ export default function VideoChat({
   remoteStream,
   setRemoteSpeaking,
   onOrient,
+  peerMicOn,
+  onMicToggle,
   chat,
   localMedia,
   onStreamUpdate,
@@ -64,6 +68,7 @@ export default function VideoChat({
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
   const [speaking, setSpeaking] = useState(false);
+  const [remoteTrackMuted, setRemoteTrackMuted] = useState(false);
   const [cool, setCool] = useState(false);
   const [isFull, setIsFull] = useState(false);
   const [facingMode, setFacingMode] = useState<FacingMode>(localMedia?.facingMode ?? "user");
@@ -85,6 +90,28 @@ export default function VideoChat({
       v.play().catch(() => {});
     }
   }, [remoteStream]);
+
+  /* відстеження вимкнення аудіотреку співрозмовника через WebRTC події */
+  useEffect(() => {
+    if (!remoteStream) return;
+    const audioTrack = remoteStream.getAudioTracks()[0];
+    if (!audioTrack) {
+      setRemoteTrackMuted(false);
+      return;
+    }
+    setRemoteTrackMuted(!audioTrack.enabled || audioTrack.muted);
+    const onMute = () => setRemoteTrackMuted(true);
+    const onUnmute = () => setRemoteTrackMuted(false);
+    audioTrack.addEventListener("mute", onMute);
+    audioTrack.addEventListener("unmute", onUnmute);
+    audioTrack.addEventListener("ended", onMute);
+    return () => {
+      audioTrack.removeEventListener("mute", onMute);
+      audioTrack.removeEventListener("unmute", onUnmute);
+      audioTrack.removeEventListener("ended", onMute);
+    };
+  }, [remoteStream]);
+
   useEffect(() => {
     const v = localRef.current;
     if (v && localMedia?.isReal) {
@@ -260,8 +287,10 @@ export default function VideoChat({
 
   const toggleMic = () => {
     setMicOn((v) => {
-      localMedia?.stream.getAudioTracks().forEach((tr) => (tr.enabled = v ? false : true));
-      return !v;
+      const next = !v;
+      localMedia?.stream.getAudioTracks().forEach((tr) => (tr.enabled = next));
+      onMicToggle?.(next);
+      return next;
     });
   };
   const toggleCam = () => {
@@ -355,43 +384,74 @@ export default function VideoChat({
       />
 
       {/* верхня панель: статус + пір */}
-      <div className={`absolute top-2 sm:top-3 left-2 sm:left-3 right-2 sm:right-3 ${isFull ? "pt-[env(safe-area-inset-top,10px)]" : "pt-[env(safe-area-inset-top,0px)]"} flex items-start justify-between gap-2 z-20 pointer-events-none`}>
-        <div className="flex items-center gap-2 sm:gap-2.5 rounded-xl bg-[color-mix(in_srgb,var(--c-bg)_76%,transparent)] backdrop-blur-md border border-[var(--c-line)] px-2.5 sm:px-3.5 py-1.5 sm:py-2 pointer-events-auto shadow-sm">
-          <span className="led led-mint" />
-          <div className="leading-tight">
-            <p className="font-mono text-[9px] sm:text-[10px] tracking-[0.18em] text-[var(--c-mint)]">{t("state.live")}</p>
-            <p className="text-xs sm:text-sm font-700 text-[var(--c-text)] truncate max-w-[140px] sm:max-w-[200px]">
-              {peer.name}
-              {!peer.real && <span className="font-mono text-[10px] sm:text-[11px] text-[var(--c-dim)]"> · {peer.ping}ms</span>}
-              {peer.real && <span className="font-mono text-[10px] sm:text-[11px] text-[var(--c-mint)]"> · p2p</span>}
-            </p>
+      {(() => {
+        const effectivePeerMic = peerMicOn !== undefined ? peerMicOn : !remoteTrackMuted;
+        return (
+          <div className={`absolute top-2 sm:top-3 left-2 sm:left-3 right-2 sm:right-3 ${isFull ? "pt-[env(safe-area-inset-top,10px)]" : "pt-[env(safe-area-inset-top,0px)]"} flex items-start justify-between gap-2 z-20 pointer-events-none`}>
+            <div className="flex items-center gap-2 sm:gap-2.5 rounded-xl bg-[color-mix(in_srgb,var(--c-bg)_76%,transparent)] backdrop-blur-md border border-[var(--c-line)] px-2.5 sm:px-3.5 py-1.5 sm:py-2 pointer-events-auto shadow-sm">
+              <span className="led led-mint" />
+              <div className="leading-tight">
+                <p className="font-mono text-[9px] sm:text-[10px] tracking-[0.18em] text-[var(--c-mint)]">{t("state.live")}</p>
+                <div className="flex items-center gap-1.5 sm:gap-2">
+                  <p className="text-xs sm:text-sm font-700 text-[var(--c-text)] truncate max-w-[120px] sm:max-w-[180px]">
+                    {peer.name}
+                    {!peer.real && <span className="font-mono text-[10px] sm:text-[11px] text-[var(--c-dim)]"> · {peer.ping}ms</span>}
+                    {peer.real && <span className="font-mono text-[10px] sm:text-[11px] text-[var(--c-mint)]"> · p2p</span>}
+                  </p>
+                  <span
+                    className={`inline-flex items-center justify-center p-1 rounded-md border backdrop-blur-sm ${
+                      effectivePeerMic
+                        ? "text-emerald-400 border-emerald-500/40 bg-emerald-950/60 shadow-[0_0_8px_rgba(52,211,153,0.25)]"
+                        : "text-rose-400 border-rose-500/40 bg-rose-950/60 shadow-[0_0_8px_rgba(244,63,94,0.25)]"
+                    }`}
+                    title={effectivePeerMic ? "Мікрофон співрозмовника увімкнено" : "Мікрофон співрозмовника вимкнено"}
+                  >
+                    {effectivePeerMic ? (
+                      <IconMic className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : (
+                      <IconMicOff className="w-3.5 h-3.5 text-rose-400" />
+                    )}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div className="hidden sm:flex flex-col items-end gap-1.5 pointer-events-auto">
+              <div className={`flex items-center gap-[3px] h-7 px-2.5 rounded-lg backdrop-blur-md border ${
+                effectivePeerMic
+                  ? "bg-[color-mix(in_srgb,var(--c-bg)_72%,transparent)] border-[var(--c-line)]"
+                  : "bg-rose-950/40 border-rose-500/30"
+              }`}>
+                {effectivePeerMic ? (
+                  [0, 1, 2, 3].map((i) => (
+                    <span
+                      key={i}
+                      className="w-[3px] rounded-full bg-emerald-400 transition-all duration-300"
+                      style={{ height: speaking ? `${10 + ((i * 7 + peer.ping) % 14)}px` : "4px" }}
+                    />
+                  ))
+                ) : (
+                  <span className="font-mono text-[10px] text-rose-400 flex items-center gap-1 font-600">
+                    <IconMicOff className="w-3 h-3 text-rose-400" /> mute
+                  </span>
+                )}
+              </div>
+              <div className="flex gap-1">
+                {peer.real ? (
+                  <span className="font-mono text-[10px] px-2 py-0.5 rounded-md bg-[color-mix(in_srgb,var(--c-bg)_72%,transparent)] backdrop-blur-md border border-[var(--c-line)] text-[var(--c-mint)]">
+                    #{peer.id} · webrtc
+                  </span>
+                ) : (
+                  (peer.tags ?? []).slice(0, 3).map((tg) => (
+                    <span key={tg} className="font-mono text-[10px] px-2 py-0.5 rounded-md bg-[color-mix(in_srgb,var(--c-bg)_72%,transparent)] backdrop-blur-md border border-[var(--c-line)] text-[var(--c-dim)]">
+                      #{tg}
+                    </span>
+                  ))
+                )}
+              </div>
+            </div>
           </div>
-        </div>
-        <div className="hidden sm:flex flex-col items-end gap-1.5 pointer-events-auto">
-          <div className="flex items-end gap-[3px] h-7 px-3 rounded-lg bg-[color-mix(in_srgb,var(--c-bg)_72%,transparent)] backdrop-blur-md border border-[var(--c-line)]">
-            {[0, 1, 2, 3].map((i) => (
-              <span
-                key={i}
-                className="w-[3px] rounded-full bg-[var(--c-mint)] transition-all duration-300"
-                style={{ height: speaking ? `${10 + ((i * 7 + peer.ping) % 14)}px` : "4px" }}
-              />
-            ))}
-          </div>
-          <div className="flex gap-1">
-            {peer.real ? (
-              <span className="font-mono text-[10px] px-2 py-0.5 rounded-md bg-[color-mix(in_srgb,var(--c-bg)_72%,transparent)] backdrop-blur-md border border-[var(--c-line)] text-[var(--c-mint)]">
-                #{peer.id} · webrtc
-              </span>
-            ) : (
-              (peer.tags ?? []).slice(0, 3).map((tg) => (
-                <span key={tg} className="font-mono text-[10px] px-2 py-0.5 rounded-md bg-[color-mix(in_srgb,var(--c-bg)_72%,transparent)] backdrop-blur-md border border-[var(--c-line)] text-[var(--c-dim)]">
-                  #{tg}
-                </span>
-              ))
-            )}
-          </div>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* локальне відео (PiP) */}
       <div className="absolute right-2 sm:right-3 bottom-14 sm:bottom-20 w-24 sm:w-36 md:w-44 aspect-[4/3] rounded-lg overflow-hidden border border-[var(--c-line2)] shadow-[var(--c-shadow)] z-20 bg-black">
@@ -415,8 +475,18 @@ export default function VideoChat({
             <IconCamOff className="w-5 h-5 sm:w-6 sm:h-6 text-[var(--c-faint)]" />
           </div>
         )}
-        <div className="absolute top-1 left-1.5 flex items-center gap-1 z-30">
+        <div className="absolute top-1 left-1.5 flex items-center gap-1.5 z-30">
           <span className="font-mono text-[9px] sm:text-[10px] tracking-widest text-[var(--c-mint)]">{t("video.you")}</span>
+          <span
+            className={`inline-flex items-center justify-center p-0.5 rounded border backdrop-blur-sm ${
+              micOn
+                ? "text-emerald-400 border-emerald-500/40 bg-emerald-950/60"
+                : "text-rose-400 border-rose-500/40 bg-rose-950/60"
+            }`}
+            title={micOn ? "Ваш мікрофон увімкнено" : "Ваш мікрофон вимкнено"}
+          >
+            {micOn ? <IconMic className="w-2.5 h-2.5 text-emerald-400" /> : <IconMicOff className="w-2.5 h-2.5 text-rose-400" />}
+          </span>
           {localMedia?.hasCam && (
             <span className="font-mono text-[8px] sm:text-[9px] px-1 py-0.2 rounded bg-black/60 text-[var(--c-faint)] uppercase">
               {facingMode === "environment" ? "rear" : "front"}
@@ -496,12 +566,16 @@ export default function VideoChat({
       <div className={`absolute ${isFull ? "bottom-2 sm:bottom-4 pb-[env(safe-area-inset-bottom,8px)]" : "bottom-2 sm:bottom-4 pb-[env(safe-area-inset-bottom,0px)]"} left-1/2 -translate-x-1/2 z-30 flex justify-center px-1 pointer-events-none w-full max-w-[calc(100vw-8px)] sm:max-w-max`}>
         <div className="pointer-events-auto flex items-center justify-center gap-1 sm:gap-1.5 p-1 sm:p-1.5 bg-[color-mix(in_srgb,var(--c-bg)_82%,transparent)] backdrop-blur-md rounded-xl sm:rounded-2xl border border-[var(--c-line)] shadow-lg max-w-full overflow-x-auto no-scrollbar">
           <button
-            className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none ${!micOn ? "!text-[var(--c-red)] !border-[color-mix(in_srgb,var(--c-red)_50%,transparent)]" : ""}`}
+            className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none transition-all ${
+              micOn
+                ? "!text-emerald-400 !border-emerald-500/40 bg-emerald-950/40 hover:bg-emerald-950/60"
+                : "!text-rose-400 !border-rose-500/50 bg-rose-950/40 hover:bg-rose-950/60"
+            }`}
             onClick={toggleMic}
-            title={t("video.mic")}
+            title={micOn ? t("video.mic") : t("video.mic")}
             aria-label={t("video.mic")}
           >
-            {micOn ? <IconMic className="w-4 h-4 sm:w-5 sm:h-5" /> : <IconMicOff className="w-4 h-4 sm:w-5 sm:h-5" />}
+            {micOn ? <IconMic className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400" /> : <IconMicOff className="w-4 h-4 sm:w-5 sm:h-5 text-rose-400" />}
           </button>
           <button
             className={`btn btn-icon min-h-[38px] min-w-[38px] sm:min-h-[44px] sm:min-w-[44px] !p-1.5 sm:!p-2.5 flex-none ${!camOn ? "!text-[var(--c-red)] !border-[color-mix(in_srgb,var(--c-red)_50%,transparent)]" : ""}`}

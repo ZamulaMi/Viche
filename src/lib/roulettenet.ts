@@ -33,14 +33,16 @@ export type RouletteHooks = {
   onPeerLeft: () => void;
   onIce?: (info: string) => void;
   onOrientChange?: (orient: "land" | "port") => void;
+  onPeerMic?: (on: boolean) => void;
 };
 
 type Wire =
-  | { t: "knock"; from: string; f: RouletteFilters; u: string; orient?: "land" | "port" }
-  | { t: "accept"; from: string; u: string; orient?: "land" | "port" }
+  | { t: "knock"; from: string; f: RouletteFilters; u: string; orient?: "land" | "port"; mic?: boolean }
+  | { t: "accept"; from: string; u: string; orient?: "land" | "port"; mic?: boolean }
   | { t: "busy" }
-  | { t: "chello"; from: string; orient?: "land" | "port" }
+  | { t: "chello"; from: string; orient?: "land" | "port"; mic?: boolean }
   | { t: "orient"; orient: "land" | "port" }
+  | { t: "mic"; on: boolean }
   | { t: "chat"; text: string }
   | { t: "bye" };
 
@@ -86,6 +88,7 @@ export class RouletteNet {
   private uid = browserUid();
   private myFilters: RouletteFilters = { gender: "any", lang: "any", tags: [] };
   private myOrient: "land" | "port" = "land";
+  private myMic = true;
 
   private partnerId: string | null = null;
   private chatConn: DataConnection | null = null;
@@ -143,6 +146,17 @@ export class RouletteNet {
     if (this.chatConn && this.chatConn.open) {
       try {
         this.chatConn.send({ t: "orient", orient } satisfies Wire);
+      } catch {
+        /* noop */
+      }
+    }
+  }
+
+  public sendMic(on: boolean) {
+    this.myMic = on;
+    if (this.chatConn && this.chatConn.open) {
+      try {
+        this.chatConn.send({ t: "mic", on } satisfies Wire);
       } catch {
         /* noop */
       }
@@ -456,6 +470,9 @@ export class RouletteNet {
       if (msg.orient) {
         this.hooks.onOrientChange?.(msg.orient);
       }
+      if (typeof msg.mic === "boolean") {
+        this.hooks.onPeerMic?.(msg.mic);
+      }
 
       // Приймаємо парування
       try {
@@ -464,6 +481,7 @@ export class RouletteNet {
           from: this.myPeerId,
           u: this.uid,
           orient: this.myOrient,
+          mic: this.myMic,
         } satisfies Wire);
       } catch {
         /* noop */
@@ -558,6 +576,7 @@ export class RouletteNet {
           u: this.uid,
           f: this.myFilters,
           orient: this.myOrient,
+          mic: this.myMic,
         } satisfies Wire);
       } catch {
         cleanup();
@@ -574,6 +593,9 @@ export class RouletteNet {
         }
         if (msg.orient) {
           this.hooks.onOrientChange?.(msg.orient);
+        }
+        if (typeof msg.mic === "boolean") {
+          this.hooks.onPeerMic?.(msg.mic);
         }
         const partnerDirectId = msg.from;
         if (partnerDirectId) {
@@ -634,8 +656,9 @@ export class RouletteNet {
         this.chatConn = c;
         c.on("open", () => {
           try {
-            c.send({ t: "chello", from: this.myPeerId, orient: this.myOrient } satisfies Wire);
+            c.send({ t: "chello", from: this.myPeerId, orient: this.myOrient, mic: this.myMic } satisfies Wire);
             c.send({ t: "orient", orient: this.myOrient } satisfies Wire);
+            c.send({ t: "mic", on: this.myMic } satisfies Wire);
           } catch {
             /* noop */
           }
@@ -704,12 +727,18 @@ export class RouletteNet {
         this.emitChat(m.text);
       } else if (m.t === "orient" && m.orient) {
         this.hooks.onOrientChange?.(m.orient);
+      } else if (m.t === "mic" && typeof m.on === "boolean") {
+        this.hooks.onPeerMic?.(m.on);
       } else if (m.t === "chello") {
         if (m.orient) {
           this.hooks.onOrientChange?.(m.orient);
         }
+        if (typeof m.mic === "boolean") {
+          this.hooks.onPeerMic?.(m.mic);
+        }
         try {
           c.send({ t: "orient", orient: this.myOrient } satisfies Wire);
+          c.send({ t: "mic", on: this.myMic } satisfies Wire);
         } catch {
           /* noop */
         }
